@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
+import { MASTER_COMPANIES, MASTER_DEPARTMENTS } from '../../constants/masterData';
 import { AppUser } from '../../types';
 import {
   Shield,
@@ -19,6 +20,7 @@ import {
   Layers,
   ArrowLeft,
   Clock,
+  RefreshCw,
 } from 'lucide-react';
 
 interface SignInViewProps {
@@ -31,7 +33,7 @@ export const SignInView: React.FC<SignInViewProps> = ({
   onOpenFirstAdminSetup,
 }) => {
   const { login, registerEmployee, hasAnyUsers } = useAuth();
-  const { companies, departments } = useData();
+  const { companies, departments, isLoading: isDataLoading, error: dataError } = useData();
 
   // Mode: login or register
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -51,12 +53,39 @@ export const SignInView: React.FC<SignInViewProps> = ({
   const [regPassword, setRegPassword] = useState('');
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
   const [regCompanyId, setRegCompanyId] = useState('');
-  const [regDepartmentId, setRegDepartmentId] = useState('');
+  const [regDepartmentName, setRegDepartmentName] = useState('');
   const [regShowPassword, setRegShowPassword] = useState(false);
   const [regSuccessMessage, setRegSuccessMessage] = useState<string | null>(null);
 
-  // Filter departments by chosen company
-  const availableDepts = departments.filter((d) => !regCompanyId || d.companyId === regCompanyId);
+  // Master companies list: ensure AGIPL, ASSPL, ONYX are always present
+  const availableCompanies = useMemo(() => {
+    if (companies && companies.length > 0) {
+      return companies;
+    }
+    return MASTER_COMPANIES.map((mc) => ({
+      id: mc.id,
+      name: mc.name,
+      code: mc.code,
+      contactEmail: mc.contactEmail,
+      phone: '',
+      address: '',
+      status: 'active' as const,
+      createdAt: '',
+      updatedAt: '',
+    }));
+  }, [companies]);
+
+  // Master departments list: ensure all 29 required departments are available
+  const availableDepartments = useMemo(() => {
+    if (regCompanyId) {
+      const coDepts = departments.filter((d) => d.companyId === regCompanyId);
+      if (coDepts.length > 0) {
+        return coDepts.map((d) => d.name);
+      }
+    }
+    // Return all 29 master departments
+    return MASTER_DEPARTMENTS;
+  }, [departments, regCompanyId]);
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,18 +138,25 @@ export const SignInView: React.FC<SignInViewProps> = ({
 
     try {
       setIsSubmitting(true);
-      const selCo = companies.find((c) => c.id === regCompanyId);
-      const selDept = departments.find((d) => d.id === regDepartmentId);
+      const selCo = availableCompanies.find(
+        (c) => c.id === regCompanyId || c.name.toLowerCase() === regCompanyId.toLowerCase()
+      );
+      // Resolve matching department in database or master list
+      const matchingDept = departments.find(
+        (d) =>
+          (selCo ? d.companyId === selCo.id : true) &&
+          d.name.toLowerCase() === regDepartmentName.trim().toLowerCase()
+      );
 
       const res = await registerEmployee({
         fullName: regFullName.trim(),
         username: regUsername.trim().toLowerCase(),
         email: regEmail.trim().toLowerCase(),
         password: regPassword,
-        companyId: regCompanyId || undefined,
-        companyName: selCo?.name,
-        departmentId: regDepartmentId || undefined,
-        departmentName: selDept?.name,
+        companyId: selCo?.id || undefined,
+        companyName: selCo?.name || undefined,
+        departmentId: matchingDept?.id || undefined,
+        departmentName: regDepartmentName.trim() || matchingDept?.name || undefined,
       });
 
       if (!res.success) {
@@ -145,6 +181,8 @@ export const SignInView: React.FC<SignInViewProps> = ({
     setPassword('');
     setRegPassword('');
     setRegConfirmPassword('');
+    setRegCompanyId('');
+    setRegDepartmentName('');
   };
 
   return (
@@ -376,49 +414,66 @@ export const SignInView: React.FC<SignInViewProps> = ({
                   </div>
 
                   {/* Company & Department Selection */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Company / Entity
-                      </label>
-                      <div className="relative">
-                        <Building className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                        <select
-                          value={regCompanyId}
-                          onChange={(e) => {
-                            setRegCompanyId(e.target.value);
-                            setRegDepartmentId('');
-                          }}
-                          className="w-full pl-8 pr-2.5 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 transition-colors text-slate-700"
-                        >
-                          <option value="">Select Company...</option>
-                          {companies.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name}
-                            </option>
-                          ))}
-                        </select>
+                  <div>
+                    {isDataLoading && companies.length === 0 && (
+                      <div className="flex items-center gap-1.5 text-[11px] text-indigo-600 mb-1.5 font-medium animate-pulse">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        <span>Loading enterprise master data...</span>
                       </div>
-                    </div>
+                    )}
+                    {dataError && (
+                      <div className="flex items-center gap-1.5 text-[11px] text-rose-600 mb-1.5 font-medium">
+                        <AlertCircle className="w-3 h-3" />
+                        <span>Error loading master data: {dataError}</span>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Company / Entity *
+                        </label>
+                        <div className="relative">
+                          <Building className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                          <select
+                            value={regCompanyId}
+                            onChange={(e) => {
+                              setRegCompanyId(e.target.value);
+                            }}
+                            disabled={availableCompanies.length === 0}
+                            className="w-full pl-8 pr-2.5 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 transition-colors text-slate-700 disabled:bg-slate-100 disabled:opacity-60 cursor-pointer"
+                            required
+                          >
+                            <option value="">Select Company...</option>
+                            {availableCompanies.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
 
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Department
-                      </label>
-                      <div className="relative">
-                        <Layers className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                        <select
-                          value={regDepartmentId}
-                          onChange={(e) => setRegDepartmentId(e.target.value)}
-                          className="w-full pl-8 pr-2.5 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 transition-colors text-slate-700"
-                        >
-                          <option value="">Select Department...</option>
-                          {availableDepts.map((d) => (
-                            <option key={d.id} value={d.id}>
-                              {d.name}
-                            </option>
-                          ))}
-                        </select>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Department *
+                        </label>
+                        <div className="relative">
+                          <Layers className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                          <select
+                            value={regDepartmentName}
+                            onChange={(e) => setRegDepartmentName(e.target.value)}
+                            disabled={availableDepartments.length === 0}
+                            className="w-full pl-8 pr-2.5 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 transition-colors text-slate-700 disabled:bg-slate-100 disabled:opacity-60 cursor-pointer"
+                            required
+                          >
+                            <option value="">Select Department...</option>
+                            {availableDepartments.map((deptName) => (
+                              <option key={deptName} value={deptName}>
+                                {deptName}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
                     </div>
                   </div>

@@ -57,9 +57,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const isITAdmin = activeRole === 'admin';
   const isSuperAdmin =
     isITAdmin &&
-    (!currentUser?.companyId ||
-      currentUser?.email === 'rahulprashad80@gmail.com' ||
-      currentUser?.username === 'sameertupe');
+    (currentUser?.email === 'rahulprashad80@gmail.com' ||
+      currentUser?.username === 'rahulprasad' ||
+      (!currentUser?.companyId && currentUser?.username !== 'sameertupe'));
 
   // Role permissions for Quick Actions
   const canRegisterAsset = isITAdmin || isTechnician;
@@ -69,17 +69,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   // Inventory export dataset scoped by IT Admin authorization
   const authorizedInventoryScope = useMemo(() => {
     if (!canExportInventory) return [];
-    if (isSuperAdmin || !currentUser?.companyId) {
+    if (isSuperAdmin) {
       return computers;
     }
-    return computers.filter((c) => c.companyId === currentUser.companyId);
+    const targetCoId = currentUser?.companyId || (currentUser?.username === 'sameertupe' ? 'comp-agipl' : undefined);
+    if (!targetCoId) return computers;
+    return computers.filter((c) => c.companyId === targetCoId);
   }, [computers, canExportInventory, isSuperAdmin, currentUser]);
 
   const userCompanyName = useMemo(() => {
-    if (!currentUser?.companyId) return 'Organization-Wide';
-    const found = companies.find((c) => c.id === currentUser.companyId);
-    return found?.name || currentUser.companyName || 'Assigned IT Team';
-  }, [companies, currentUser]);
+    if (isSuperAdmin) return 'Organization-Wide (All Companies)';
+    if (currentUser?.companyId) {
+      const found = companies.find((c) => c.id === currentUser.companyId);
+      return found?.name || currentUser.companyName || 'AGIPL';
+    }
+    if (currentUser?.username === 'sameertupe') {
+      return 'AGIPL';
+    }
+    return 'Assigned IT Team';
+  }, [companies, currentUser, isSuperAdmin]);
 
   // Quick Action 1: Register New Asset
   const handleRegisterAsset = () => {
@@ -368,6 +376,124 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
         </div>
       )}
+
+      {/* Quick Actions Panel */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-4 sm:p-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3.5 mb-3.5 border-b border-slate-100">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+              <Zap className="w-4 h-4 text-indigo-600" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Quick Actions</h3>
+              <p className="text-xs text-slate-500">
+                {isSuperAdmin
+                  ? 'Organization-wide administrative controls and inventory operations'
+                  : isITAdmin
+                  ? `IT operations and asset management for ${userCompanyName}`
+                  : isTechnician
+                  ? 'Hardware intake and service desk resolution actions'
+                  : 'Employee self-service support actions'}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full border border-slate-200/60">
+              Role: <strong className="text-indigo-700 uppercase tracking-wide">{activeRole}</strong> • Scope: {isSuperAdmin ? 'All Entities' : userCompanyName}
+            </span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {/* Action 1: Register New Asset (Admins & Technicians only - Never exposed to Employees) */}
+          {canRegisterAsset && (
+            <button
+              type="button"
+              onClick={handleRegisterAsset}
+              className="p-3.5 rounded-xl border border-slate-200 hover:border-indigo-300 bg-white hover:bg-indigo-50/40 transition-all text-left flex items-start gap-3 shadow-2xs group cursor-pointer"
+            >
+              <div className="w-9 h-9 rounded-lg bg-indigo-50 text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white transition-colors flex items-center justify-center shrink-0 mt-0.5">
+                <Laptop className="w-4 h-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">
+                    Register New Asset
+                  </h4>
+                  <PlusCircle className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-600" />
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                  Add a workstation, laptop, or server to the hardware inventory
+                </p>
+              </div>
+            </button>
+          )}
+
+          {/* Action 2: Create New Ticket (All authorized roles: Employees, Techs, Admins) */}
+          <button
+            type="button"
+            onClick={handleCreateTicketAction}
+            className="p-3.5 rounded-xl border border-slate-200 hover:border-rose-300 bg-white hover:bg-rose-50/40 transition-all text-left flex items-start gap-3 shadow-2xs group cursor-pointer"
+          >
+            <div className="w-9 h-9 rounded-lg bg-rose-50 text-rose-600 group-hover:bg-rose-600 group-hover:text-white transition-colors flex items-center justify-center shrink-0 mt-0.5">
+              <Ticket className="w-4 h-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold text-slate-900 group-hover:text-rose-600 transition-colors">
+                  Create New Ticket
+                </h4>
+                <PlusCircle className="w-3.5 h-3.5 text-slate-400 group-hover:text-rose-600" />
+              </div>
+              <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                Submit a technical incident, fault report, or service request
+              </p>
+            </div>
+          </button>
+
+          {/* Action 3: Export Inventory Report (IT Admin & Super Admin only - Never exposed to unauthorized users) */}
+          {canExportInventory && (
+            <div className="p-3.5 rounded-xl border border-slate-200 bg-white hover:border-emerald-300 transition-all flex items-start gap-3 shadow-2xs group">
+              <div className="w-9 h-9 rounded-lg bg-emerald-50 text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white transition-colors flex items-center justify-center shrink-0 mt-0.5">
+                <FileSpreadsheet className="w-4 h-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-900 group-hover:text-emerald-700 transition-colors">
+                    Export Inventory Report
+                  </h4>
+                  <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/50">
+                    {authorizedInventoryScope.length} assets
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5 leading-snug mb-2">
+                  {isSuperAdmin
+                    ? 'Export complete organization-wide hardware fleet report'
+                    : `Export hardware inventory scoped to ${userCompanyName}`}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleExportInventory('xlsx')}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition-colors cursor-pointer shadow-2xs"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>Excel (.xlsx)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleExportInventory('csv')}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-md bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors cursor-pointer"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>CSV</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Top Metric Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

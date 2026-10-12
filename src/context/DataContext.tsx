@@ -192,10 +192,45 @@ interface DataContextType {
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
 
+const getDefaultCompanies = (): Company[] => {
+  const now = new Date().toISOString();
+  return MASTER_COMPANIES.map((mc) => ({
+    id: mc.id,
+    name: mc.name,
+    code: mc.code,
+    contactEmail: mc.contactEmail,
+    phone: '',
+    address: '',
+    status: 'active' as const,
+    createdAt: now,
+    updatedAt: now,
+  }));
+};
+
+const getDefaultDepartments = (): Department[] => {
+  const now = new Date().toISOString();
+  const list: Department[] = [];
+  for (const mc of MASTER_COMPANIES) {
+    for (const dName of MASTER_DEPARTMENTS) {
+      const slug = dName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      list.push({
+        id: `dept-${mc.name.toLowerCase()}-${slug}`,
+        name: dName,
+        code: dName.length <= 4 ? dName : undefined,
+        companyId: mc.id,
+        status: 'active' as const,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+  return list;
+};
+
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { currentUser, isLoading: authLoading } = useAuth();
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
+  const [companies, setCompanies] = useState<Company[]>(getDefaultCompanies);
+  const [departments, setDepartments] = useState<Department[]>(getDefaultDepartments);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [computers, setComputers] = useState<Computer[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -208,8 +243,67 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const [organizationAuditLog, setOrganizationAuditLog] = useState<OrganizationAuditEntry[]>([]);
 
+  // 1. Immediately subscribe to public companies & departments master data (no auth required)
   useEffect(() => {
-    // Only attach onSnapshot listeners if auth is ready and user is authenticated
+    const unsubCompanies = onSnapshot(
+      collection(db, 'companies'),
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const list: Company[] = [];
+          snapshot.forEach((d) => {
+            if (DEMO_COMPANY_IDS.has(d.id)) {
+              deleteDoc(doc(db, 'companies', d.id)).catch(() => {});
+            } else {
+              list.push({ id: d.id, ...d.data() } as Company);
+            }
+          });
+          if (list.length > 0) {
+            list.sort((a, b) => a.name.localeCompare(b.name));
+            setCompanies(list);
+          }
+        }
+      },
+      (err) => {
+        console.warn('Companies snapshot notice:', err);
+      }
+    );
+
+    const unsubDepartments = onSnapshot(
+      collection(db, 'departments'),
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const list: Department[] = [];
+          snapshot.forEach((d) => {
+            if (DEMO_DEPARTMENT_IDS.has(d.id)) {
+              deleteDoc(doc(db, 'departments', d.id)).catch(() => {});
+            } else {
+              list.push({ id: d.id, ...d.data() } as Department);
+            }
+          });
+          if (list.length > 0) {
+            list.sort((a, b) => a.name.localeCompare(b.name));
+            setDepartments(list);
+          }
+        }
+      },
+      (err) => {
+        console.warn('Departments snapshot notice:', err);
+      }
+    );
+
+    // Auto-verify and write master data to Firestore without duplicates
+    ensureMasterDataInFirestore().catch((err) => {
+      console.warn('Master data auto-sync notice:', err);
+    });
+
+    return () => {
+      unsubCompanies();
+      unsubDepartments();
+    };
+  }, []);
+
+  useEffect(() => {
+    // Only attach operational data listeners if auth is ready and user is authenticated
     if (authLoading) {
       return;
     }
@@ -220,51 +314,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    // Authenticated user: Attach onSnapshot listeners to Firestore
+    // Authenticated user: Attach onSnapshot listeners to Firestore for operational data
     setIsLiveSync(true);
     setIsLoading(true);
-
-    const unsubCompanies = onSnapshot(
-      collection(db, 'companies'),
-      (snapshot) => {
-        const list: Company[] = [];
-        snapshot.forEach((d) => {
-          if (DEMO_COMPANY_IDS.has(d.id)) {
-            // Delete demo document from Firestore
-            deleteDoc(doc(db, 'companies', d.id)).catch(() => {});
-          } else {
-            list.push({ id: d.id, ...d.data() } as Company);
-          }
-        });
-        list.sort((a, b) => a.name.localeCompare(b.name));
-        setCompanies(list);
-      },
-      (err) => {
-        console.warn('Companies snapshot error:', err);
-        handleFirestoreError(err, OperationType.GET, 'companies');
-      }
-    );
-
-    const unsubDepartments = onSnapshot(
-      collection(db, 'departments'),
-      (snapshot) => {
-        const list: Department[] = [];
-        snapshot.forEach((d) => {
-          if (DEMO_DEPARTMENT_IDS.has(d.id)) {
-            // Delete demo document from Firestore
-            deleteDoc(doc(db, 'departments', d.id)).catch(() => {});
-          } else {
-            list.push({ id: d.id, ...d.data() } as Department);
-          }
-        });
-        list.sort((a, b) => a.name.localeCompare(b.name));
-        setDepartments(list);
-      },
-      (err) => {
-        console.warn('Departments snapshot error:', err);
-        handleFirestoreError(err, OperationType.GET, 'departments');
-      }
-    );
 
     const unsubEmployees = onSnapshot(
       collection(db, 'employees'),
@@ -349,8 +401,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
 
     return () => {
-      unsubCompanies();
-      unsubDepartments();
       unsubEmployees();
       unsubComputers();
       unsubTickets();

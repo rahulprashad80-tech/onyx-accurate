@@ -88,6 +88,10 @@ const MainPortal: React.FC = () => {
             onSelectTicket={(ticket) => setSelectedTicket(ticket)}
             onSelectComputer={(comp) => setSelectedComputer(comp)}
             onOpenNewTicketModal={() => setIsNewTicketOpen(true)}
+            onOpenRegisterAssetModal={() => {
+              setComputerToEdit(null);
+              setIsEditComputerModalOpen(true);
+            }}
             onNavigateTab={(tab) => setCurrentTab(tab)}
           />
         );

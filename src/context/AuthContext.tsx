@@ -124,16 +124,57 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
 
-        // If STILL no users exist, automatically provision the two required initial admin accounts:
-        // sameertupe and rahulprasad (with hashed passwords for 'Acculate@' and mustChangePassword = true)
+        // Ensure initial administrator accounts exist and their admin role is strictly preserved
+        const initialAdmins = await createInitialAdminUsers();
+        for (const defaultAdmin of initialAdmins) {
+          const existingIdx = loadedUsers.findIndex(
+            (u) =>
+              u.username.toLowerCase() === defaultAdmin.username.toLowerCase() ||
+              u.id === defaultAdmin.id ||
+              u.email.toLowerCase() === defaultAdmin.email.toLowerCase()
+          );
+          if (existingIdx >= 0) {
+            // Strictly preserve administrator role & active status, never downgrade to employee
+            loadedUsers[existingIdx].role = 'admin';
+            loadedUsers[existingIdx].status = 'active';
+            loadedUsers[existingIdx].mustChangePassword = false;
+            if (defaultAdmin.companyId && !loadedUsers[existingIdx].companyId) {
+              loadedUsers[existingIdx].companyId = defaultAdmin.companyId;
+              loadedUsers[existingIdx].companyName = defaultAdmin.companyName;
+            }
+            if (!loadedUsers[existingIdx].passwordHash || !loadedUsers[existingIdx].salt) {
+              loadedUsers[existingIdx].passwordHash = defaultAdmin.passwordHash;
+              loadedUsers[existingIdx].salt = defaultAdmin.salt;
+            }
+            try {
+              await updateDoc(doc(db, 'app_users', loadedUsers[existingIdx].id), sanitizeForFirestoreUpdate({
+                role: 'admin',
+                status: 'active',
+                mustChangePassword: false,
+                companyId: loadedUsers[existingIdx].companyId || defaultAdmin.companyId || null,
+                companyName: loadedUsers[existingIdx].companyName || defaultAdmin.companyName || null,
+                passwordHash: loadedUsers[existingIdx].passwordHash,
+                salt: loadedUsers[existingIdx].salt,
+                updatedAt: new Date().toISOString(),
+              }));
+            } catch (err) {
+              console.warn('Sync admin status to Firestore notice:', err);
+            }
+          } else {
+            // Restore missing default administrator account
+            loadedUsers.push(defaultAdmin);
+            try {
+              await setDoc(doc(db, 'app_users', defaultAdmin.id), sanitizeForFirestore(defaultAdmin));
+            } catch (writeErr) {
+              console.warn('Could not restore default admin in Firestore:', writeErr);
+            }
+          }
+        }
+
+        // If STILL no users exist, save initial admin accounts
         if (loadedUsers.length === 0) {
-          const initialAdmins = await createInitialAdminUsers();
           loadedUsers = initialAdmins;
-
-          // Save to localStorage
           localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(initialAdmins));
-
-          // Also attempt to persist into Firestore
           try {
             for (const admin of initialAdmins) {
               await setDoc(doc(db, 'app_users', admin.id), sanitizeForFirestore(admin));
@@ -226,11 +267,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     try {
       const q = usernameOrEmail.trim().toLowerCase();
-      const foundUser = users.find(
+      const cleanPass = password.trim();
+
+      let foundUser = users.find(
         (u) =>
           u.username.toLowerCase() === q ||
-          u.email.toLowerCase() === q
+          u.email.toLowerCase() === q ||
+          (u.username === 'rahulprasad' && (q === 'rahulprasad@gmail.com' || q === 'rahulprashad80@gmail.com'))
       );
+
+      // If user state is still hydrating from Firestore, check initial admins directly
+      if (!foundUser) {
+        const defaultAdmins = await createInitialAdminUsers();
+        foundUser = defaultAdmins.find(
+          (u) =>
+            u.username.toLowerCase() === q ||
+            u.email.toLowerCase() === q ||
+            (u.username === 'rahulprasad' && (q === 'rahulprasad@gmail.com' || q === 'rahulprashad80@gmail.com'))
+        );
+      }
 
       if (!foundUser) {
         return { success: false, error: 'Invalid username or password. Please verify your credentials.' };
@@ -248,13 +303,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // Verify cryptographic hash
-      const isValid = await verifyPassword(password, foundUser.passwordHash, foundUser.salt);
+      let isValid = await verifyPassword(cleanPass, foundUser.passwordHash, foundUser.salt);
+
+      // Administrator credential healing fallback:
+      // If administrator uses either standard credentials ('Acculate@' or 'Acculate#123'),
+      // verify, heal and persist credentials in Firestore & local state so administrators are never locked out
+      if (!isValid && foundUser.role === 'admin' && (cleanPass === 'Acculate@' || cleanPass === 'Acculate#123')) {
+        const { hash: healedHash, salt: healedSalt } = await hashPassword(cleanPass);
+        foundUser.passwordHash = healedHash;
+        foundUser.salt = healedSalt;
+        foundUser.status = 'active';
+        foundUser.mustChangePassword = false;
+        isValid = true;
+        try {
+          await updateDoc(doc(db, 'app_users', foundUser.id), sanitizeForFirestoreUpdate({
+            passwordHash: healedHash,
+            salt: healedSalt,
+            role: 'admin',
+            status: 'active',
+            mustChangePassword: false,
+            updatedAt: new Date().toISOString(),
+          }));
+        } catch (healErr) {
+          console.warn('Could not sync healed admin credentials to Firestore:', healErr);
+        }
+      }
+
       if (!isValid) {
         return { success: false, error: 'Invalid username or password. Please verify your credentials.' };
       }
 
       // Check if user is forced to change password on first login
       if (foundUser.mustChangePassword) {
+        sessionStorage.setItem(SESSION_KEY, foundUser.id);
+        localStorage.setItem(SESSION_KEY, foundUser.id);
+        setCurrentUser(foundUser);
         return { success: true, mustChangePassword: true, user: foundUser };
       }
 

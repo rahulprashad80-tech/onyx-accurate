@@ -44,6 +44,20 @@ export interface OrganizationAuditEntry {
   details?: string;
 }
 
+export interface SystemAuditLogEntry {
+  id: string;
+  timestamp: string;
+  category: 'asset' | 'status' | 'ticket' | 'auth' | 'organization';
+  action: string;
+  actorName: string;
+  actorRole: UserRole;
+  targetType: 'computer' | 'ticket' | 'user' | 'company' | 'department';
+  targetId?: string;
+  targetLabel: string;
+  details: string;
+  metadata?: Record<string, any>;
+}
+
 export interface Company {
   id: string;
   name: string;
