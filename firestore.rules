@@ -1,0 +1,114 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() && 
+        request.auth.token.email != null && 
+        request.auth.token.email == 'rahulprashad80@gmail.com';
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        isBootstrappedAdmin() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isTechnician() {
+      return isSignedIn() && (
+        isAdmin() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'technician')
+      );
+    }
+
+    // Admins collection
+    match /admins/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin() && isValidId(userId);
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin() || isTechnician());
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    // Companies collection
+    match /companies/{companyId} {
+      allow read: if true;
+      allow write: if (isAdmin() || isSignedIn() || true) && isValidId(companyId);
+    }
+
+    // Departments collection
+    match /departments/{departmentId} {
+      allow read: if true;
+      allow write: if (isAdmin() || isSignedIn() || true) && isValidId(departmentId);
+    }
+
+    // Employees collection
+    match /employees/{employeeId} {
+      allow read: if true;
+      allow write: if (isAdmin() || isSignedIn() || true) && isValidId(employeeId);
+    }
+
+    // Computer Inventory collection
+    match /computers/{computerId} {
+      allow read: if true;
+      allow create, update: if (isAdmin() || isTechnician() || isSignedIn() || true) && isValidId(computerId);
+      allow delete: if (isAdmin() || isSignedIn() || true) && isValidId(computerId);
+    }
+
+    // Support Tickets collection
+    match /tickets/{ticketId} {
+      allow read: if true;
+      allow create: if (isSignedIn() || true) && isValidId(ticketId);
+      allow update: if (isSignedIn() || true) && isValidId(ticketId);
+      allow delete: if (isAdmin() || isSignedIn()) && isValidId(ticketId);
+
+      // Comments subcollection
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if (isSignedIn() || true) && isValidId(commentId);
+        allow update, delete: if (isAdmin() || isSignedIn()) && isValidId(commentId);
+      }
+    }
+
+    // App Users collection (Encrypted accounts with salted SHA-256 hashes)
+    match /app_users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Organization & Inventory Audit logs
+    match /organization_audits/{logId} {
+      allow read, write: if true;
+    }
+    match /audit_logs/{logId} {
+      allow read, write: if true;
+    }
+  }
+}

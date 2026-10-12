@@ -1,0 +1,180 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with role-based access information",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "maxLength": 254 },
+        "displayName": { "type": "string", "maxLength": 100 },
+        "role": { "type": "string", "enum": ["admin", "technician", "employee"] },
+        "photoURL": { "type": "string", "maxLength": 500 },
+        "companyId": { "type": "string", "maxLength": 64 },
+        "departmentId": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "displayName", "role"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Admin privileges document for role verification",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "maxLength": 254 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email"]
+    },
+    "Company": {
+      "title": "Company",
+      "description": "Company or subsidiary entity",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 100, "minLength": 1 },
+        "code": { "type": "string", "maxLength": 20, "minLength": 1 },
+        "contactEmail": { "type": "string", "maxLength": 254 },
+        "phone": { "type": "string", "maxLength": 50 },
+        "address": { "type": "string", "maxLength": 200 },
+        "website": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "code"]
+    },
+    "Department": {
+      "title": "Department",
+      "description": "Department entity associated with a company",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 100, "minLength": 1 },
+        "companyId": { "type": "string", "maxLength": 64, "minLength": 1 },
+        "headName": { "type": "string", "maxLength": 100 },
+        "floorLocation": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "companyId"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "Corporate employee record",
+      "type": "object",
+      "properties": {
+        "fullName": { "type": "string", "maxLength": 100, "minLength": 1 },
+        "email": { "type": "string", "maxLength": 254, "minLength": 3 },
+        "phone": { "type": "string", "maxLength": 50 },
+        "jobTitle": { "type": "string", "maxLength": 100 },
+        "companyId": { "type": "string", "maxLength": 64 },
+        "departmentId": { "type": "string", "maxLength": 64 },
+        "role": { "type": "string", "enum": ["admin", "technician", "employee"] },
+        "status": { "type": "string", "enum": ["active", "on_leave", "terminated"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fullName", "email", "role", "status"]
+    },
+    "Computer": {
+      "title": "Computer",
+      "description": "Hardware device and computer inventory record",
+      "type": "object",
+      "properties": {
+        "assetTag": { "type": "string", "maxLength": 50, "minLength": 1 },
+        "serialNumber": { "type": "string", "maxLength": 100, "minLength": 1 },
+        "brand": { "type": "string", "maxLength": 50 },
+        "model": { "type": "string", "maxLength": 100 },
+        "type": { "type": "string", "enum": ["laptop", "desktop", "workstation", "server", "tablet", "other"] },
+        "os": { "type": "string", "maxLength": 50 },
+        "cpu": { "type": "string", "maxLength": 100 },
+        "ram": { "type": "string", "maxLength": 50 },
+        "storage": { "type": "string", "maxLength": 50 },
+        "purchaseDate": { "type": "string", "maxLength": 50 },
+        "warrantyExpiration": { "type": "string", "maxLength": 50 },
+        "purchaseCost": { "type": "string", "maxLength": 50 },
+        "status": { "type": "string", "enum": ["in_use", "available", "maintenance", "retired", "lost"] },
+        "assignedEmployeeId": { "type": "string", "maxLength": 64 },
+        "assignedEmployeeName": { "type": "string", "maxLength": 100 },
+        "companyId": { "type": "string", "maxLength": 64 },
+        "departmentId": { "type": "string", "maxLength": 64 },
+        "location": { "type": "string", "maxLength": 100 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["assetTag", "serialNumber", "brand", "model", "type", "status"]
+    },
+    "Ticket": {
+      "title": "Ticket",
+      "description": "Support helpdesk ticket entity",
+      "type": "object",
+      "properties": {
+        "ticketNumber": { "type": "string", "maxLength": 30 },
+        "title": { "type": "string", "maxLength": 150, "minLength": 1 },
+        "description": { "type": "string", "maxLength": 2000, "minLength": 1 },
+        "category": { "type": "string", "enum": ["hardware", "software", "network", "access", "email", "other"] },
+        "priority": { "type": "string", "enum": ["urgent", "high", "medium", "low"] },
+        "status": { "type": "string", "enum": ["open", "in_progress", "pending_user", "resolved", "closed"] },
+        "requesterId": { "type": "string", "maxLength": 64 },
+        "requesterName": { "type": "string", "maxLength": 100 },
+        "requesterEmail": { "type": "string", "maxLength": 254 },
+        "assignedTechId": { "type": "string", "maxLength": 64 },
+        "assignedTechName": { "type": "string", "maxLength": 100 },
+        "assetId": { "type": "string", "maxLength": 64 },
+        "assetTag": { "type": "string", "maxLength": 50 },
+        "resolutionNotes": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ticketNumber", "title", "description", "category", "priority", "status", "requesterEmail"]
+    },
+    "TicketComment": {
+      "title": "TicketComment",
+      "description": "Discussion comment on a support ticket",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string", "maxLength": 64 },
+        "authorName": { "type": "string", "maxLength": 100 },
+        "authorRole": { "type": "string", "maxLength": 50 },
+        "content": { "type": "string", "maxLength": 2000, "minLength": 1 },
+        "isInternal": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorName", "content"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "User" },
+      "description": "User profiles"
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "Admin" },
+      "description": "Administrator authorizations"
+    },
+    "/companies/{companyId}": {
+      "schema": { "$ref": "Company" },
+      "description": "Company organizations"
+    },
+    "/departments/{departmentId}": {
+      "schema": { "$ref": "Department" },
+      "description": "Department organizational units"
+    },
+    "/employees/{employeeId}": {
+      "schema": { "$ref": "Employee" },
+      "description": "Employee directory records"
+    },
+    "/computers/{computerId}": {
+      "schema": { "$ref": "Computer" },
+      "description": "Hardware and computer assets"
+    },
+    "/tickets/{ticketId}": {
+      "schema": { "$ref": "Ticket" },
+      "description": "Support tickets"
+    },
+    "/tickets/{ticketId}/comments/{commentId}": {
+      "schema": { "$ref": "TicketComment" },
+      "description": "Ticket comments and updates"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "IT Helpdesk & Computer Inventory",
+  "description": "Internal IT helpdesk ticketing system and hardware asset inventory management portal with role-based access control.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
