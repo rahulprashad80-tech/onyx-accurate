@@ -14,6 +14,7 @@ import {
   Company, 
   Department, 
   Employee, 
+  EmployeeStatus,
   Computer, 
   ComputerAttachment,
   ComputerAuditEntry,
@@ -21,6 +22,11 @@ import {
   ComputerStatus,
   ComputerType,
   OrganizationAuditEntry,
+  InventorySnapshot,
+  InventoryAuditLog,
+  AuditLog,
+  SnapshotOperationType,
+  SchemaUpgradePreview,
   Ticket, 
   TicketComment,
   TicketAttachment,
@@ -33,6 +39,7 @@ import { handleFirestoreError, OperationType } from '../firebase/errors';
 import { sanitizeForFirestore, sanitizeForFirestoreUpdate } from '../firebase/utils';
 import { MASTER_COMPANIES, MASTER_DEPARTMENTS } from '../constants/masterData';
 import { useAuth } from './AuthContext';
+import { AuditLogService, RecordActionParams } from '../services/AuditLogService';
 
 // Demo / sample identifier sets for permanent purge of legacy sample data
 export const DEMO_COMPANY_IDS = new Set([
@@ -184,6 +191,52 @@ interface DataContextType {
   updateEmployee: (id: string, updates: Partial<Employee>) => Promise<void>;
   deleteEmployee: (id: string) => Promise<void>;
 
+  // Inventory Administration, Snapshots & Rollbacks
+  inventorySnapshots: InventorySnapshot[];
+  inventoryAuditLogs: InventoryAuditLog[];
+  auditLogs: AuditLog[];
+  recordAuditLog: (params: RecordActionParams) => Promise<AuditLog>;
+  createInventorySnapshot: (params: {
+    name: string;
+    description: string;
+    operationType: SnapshotOperationType;
+    scopeCompanyId?: string;
+    scopeCompanyName?: string;
+    assetsToSnapshot?: Computer[];
+    reason?: string;
+  }) => Promise<string>;
+  rollbackSelectedAssets: (
+    snapshotId: string,
+    assetIdsToRestore: string[],
+    reason?: string
+  ) => Promise<{ restoredCount: number }>;
+  restoreFullInventorySnapshot: (
+    snapshotId: string,
+    previewOnly?: boolean
+  ) => Promise<{ restoredCount: number; updatedCount: number; removedCount: number }>;
+  restoreDeletedAssets: (
+    snapshotId: string,
+    assetIdsToRecover: string[]
+  ) => Promise<{ recoveredCount: number }>;
+  deleteInventorySnapshot: (snapshotId: string) => Promise<void>;
+
+  // Inventory Bulk Operations
+  bulkArchiveAssets: (assetIds: string[], reason?: string) => Promise<number>;
+  bulkDeleteAssets: (assetIds: string[], confirmationWord: string, reason?: string) => Promise<number>;
+  clearAllInventory: (confirmationWord: string, reason?: string, targetCompanyId?: string) => Promise<number>;
+  bulkUpdateAssets: (
+    assetIds: string[],
+    updates: Partial<Computer>,
+    reason?: string
+  ) => Promise<number>;
+
+  // Safe Schema Upgrade
+  upgradeInventorySchema: (targetVersion?: number) => Promise<{
+    success: boolean;
+    upgradedCount: number;
+    preview: SchemaUpgradePreview;
+  }>;
+
   // Seeding
   seedDatabase: (force?: boolean) => Promise<void>;
   isSeeding: boolean;
@@ -227,11 +280,41 @@ const getDefaultDepartments = (): Department[] => {
   return list;
 };
 
+const getInitialEmployees = (): Employee[] => {
+  try {
+    const raw = localStorage.getItem('it_desk_local_users_v1');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map((u: any) => ({
+          id: u.id,
+          fullName: u.fullName || u.username,
+          username: u.username ? String(u.username).trim() : undefined,
+          email: u.email || '',
+          phone: u.phone || '',
+          jobTitle: u.jobTitle || (u.role === 'admin' ? 'Administrator' : u.role === 'technician' ? 'IT Specialist' : (u.departmentName ? `${u.departmentName} Staff` : 'Staff Member')),
+          companyId: u.companyId || '',
+          companyName: u.companyName || '',
+          departmentId: u.departmentId || '',
+          departmentName: u.departmentName || '',
+          role: (u.role || 'employee') as UserRole,
+          status: (u.status === 'active' ? 'active' : 'on_leave') as EmployeeStatus,
+          createdAt: u.createdAt || new Date().toISOString(),
+          updatedAt: u.updatedAt || new Date().toISOString(),
+        }));
+      }
+    }
+  } catch (e) {
+    console.warn('Initial employees parse notice:', e);
+  }
+  return [];
+};
+
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { currentUser, isLoading: authLoading } = useAuth();
   const [companies, setCompanies] = useState<Company[]>(getDefaultCompanies);
   const [departments, setDepartments] = useState<Department[]>(getDefaultDepartments);
-  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>(getInitialEmployees);
   const [computers, setComputers] = useState<Computer[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [commentsMap, setCommentsMap] = useState<Record<string, TicketComment[]>>({});
@@ -242,6 +325,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLiveSync, setIsLiveSync] = useState<boolean>(false);
 
   const [organizationAuditLog, setOrganizationAuditLog] = useState<OrganizationAuditEntry[]>([]);
+  const [inventorySnapshots, setInventorySnapshots] = useState<InventorySnapshot[]>([]);
+  const [inventoryAuditLogs, setInventoryAuditLogs] = useState<InventoryAuditLog[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
 
   // 1. Immediately subscribe to public companies & departments master data (no auth required)
   useEffect(() => {
@@ -318,6 +404,87 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLiveSync(true);
     setIsLoading(true);
 
+    // Unify accounts from app_users and employees so that employee dropdowns & import auto-assignment have complete data
+    let currentAppUsers: any[] = [];
+    let currentEmployees: Employee[] = [];
+
+    const rebuildUnifiedEmployees = () => {
+      const empMap = new Map<string, Employee>();
+
+      // 1. Process app_users first (real user accounts with document IDs and usernames)
+      for (const u of currentAppUsers) {
+        if (!u.id) continue;
+        const empItem: Employee = {
+          id: u.id,
+          fullName: u.fullName || u.username || 'User',
+          username: u.username ? String(u.username).trim() : undefined,
+          email: u.email || '',
+          phone: u.phone || '',
+          jobTitle: u.jobTitle || (u.role === 'admin' ? 'Administrator' : u.role === 'technician' ? 'IT Specialist' : (u.departmentName ? `${u.departmentName} Staff` : 'Staff Member')),
+          companyId: u.companyId || '',
+          companyName: u.companyName || '',
+          departmentId: u.departmentId || '',
+          departmentName: u.departmentName || '',
+          role: (u.role || 'employee') as UserRole,
+          status: (u.status === 'active' ? 'active' : 'on_leave') as EmployeeStatus,
+          createdAt: u.createdAt || new Date().toISOString(),
+          updatedAt: u.updatedAt || new Date().toISOString(),
+        };
+        empMap.set(u.id, empItem);
+      }
+
+      // 2. Process records from 'employees' collection
+      for (const e of currentEmployees) {
+        if (!e.id) continue;
+        let matchedKey: string | null = null;
+        if (empMap.has(e.id)) {
+          matchedKey = e.id;
+        } else {
+          for (const [key, existing] of empMap.entries()) {
+            if (
+              (e.username && existing.username && e.username.trim().toLowerCase() === existing.username.trim().toLowerCase()) ||
+              (e.email && existing.email && e.email.trim().toLowerCase() === existing.email.trim().toLowerCase())
+            ) {
+              matchedKey = key;
+              break;
+            }
+          }
+        }
+
+        if (matchedKey) {
+          const existing = empMap.get(matchedKey)!;
+          empMap.set(matchedKey, {
+            ...existing,
+            ...e,
+            id: existing.id || e.id,
+            username: existing.username || e.username,
+            fullName: existing.fullName || e.fullName,
+            phone: e.phone || existing.phone,
+            jobTitle: e.jobTitle || existing.jobTitle,
+          });
+        } else {
+          empMap.set(e.id, e);
+        }
+      }
+
+      const mergedList = Array.from(empMap.values());
+      mergedList.sort((a, b) => a.fullName.localeCompare(b.fullName));
+      setEmployees(mergedList);
+    };
+
+    const unsubAppUsers = onSnapshot(
+      collection(db, 'app_users'),
+      (snapshot) => {
+        const list: any[] = [];
+        snapshot.forEach((d) => list.push({ id: d.id, ...d.data() }));
+        currentAppUsers = list;
+        rebuildUnifiedEmployees();
+      },
+      (err) => {
+        console.warn('app_users listener notice:', err);
+      }
+    );
+
     const unsubEmployees = onSnapshot(
       collection(db, 'employees'),
       (snapshot) => {
@@ -330,12 +497,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             list.push({ id: d.id, ...d.data() } as Employee);
           }
         });
-        list.sort((a, b) => a.fullName.localeCompare(b.fullName));
-        setEmployees(list);
+        currentEmployees = list;
+        rebuildUnifiedEmployees();
       },
       (err) => {
         console.warn('Employees snapshot error:', err);
-        handleFirestoreError(err, OperationType.GET, 'employees');
       }
     );
 
@@ -395,16 +561,51 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     );
 
+    const unsubSnapshots = onSnapshot(
+      collection(db, 'inventory_snapshots'),
+      (snapshot) => {
+        const list: InventorySnapshot[] = [];
+        snapshot.forEach((d) => list.push({ id: d.id, ...d.data() } as InventorySnapshot));
+        list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        setInventorySnapshots(list);
+      },
+      (err) => {
+        console.warn('Inventory snapshots listener notice:', err);
+      }
+    );
+
+    const unsubInventoryAudits = onSnapshot(
+      collection(db, 'inventory_audit_logs'),
+      (snapshot) => {
+        const list: InventoryAuditLog[] = [];
+        snapshot.forEach((d) => list.push({ id: d.id, ...d.data() } as InventoryAuditLog));
+        list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        setInventoryAuditLogs(list);
+      },
+      (err) => {
+        console.warn('Inventory audit logs listener notice:', err);
+      }
+    );
+
+    // Dedicated subscription to Firestore 'auditLogs' collection
+    const unsubAuditLogs = AuditLogService.subscribeToAuditLogs((logs) => {
+      setAuditLogs(logs);
+    });
+
     // Auto-verify that master companies (AGIPL, ASSPL, ONYX) and 29 standard departments are in Firestore
     ensureMasterDataInFirestore().catch((err) => {
       console.warn('Master data auto-sync check error:', err);
     });
 
     return () => {
+      unsubAppUsers();
       unsubEmployees();
       unsubComputers();
       unsubTickets();
       unsubAudits();
+      unsubSnapshots();
+      unsubInventoryAudits();
+      unsubAuditLogs();
     };
   }, [currentUser, authLoading]);
 
@@ -762,11 +963,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     actor?: { name: string; role: UserRole }
   ): Promise<void> => {
     const assignDate = assignedDate || new Date().toISOString().split('T')[0];
+    const targetEmp = employees.find((e) => e.id === employeeId);
+    const assignedUsername = targetEmp?.username || undefined;
+
     const auditEntry: Omit<ComputerAuditEntry, 'id' | 'timestamp'> = {
       type: 'assigned',
       actorName: actor?.name || 'IT Admin',
       actorRole: actor?.role || 'admin',
-      message: `Assigned hardware asset to ${employeeName}`,
+      message: `Assigned hardware asset to ${employeeName}${assignedUsername ? ` (@${assignedUsername})` : ''}`,
       newValue: employeeName,
     };
 
@@ -776,8 +980,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         status: 'assigned',
         assignedEmployeeId: employeeId,
         assignedEmployeeName: employeeName,
-        companyId: companyId || undefined,
-        departmentId: departmentId || undefined,
+        assetUserName: assignedUsername,
+        assignmentStatus: 'matched',
+        companyId: companyId || targetEmp?.companyId || undefined,
+        departmentId: departmentId || targetEmp?.departmentId || undefined,
         assignedDate: assignDate,
         returnedDate: undefined,
       },
@@ -811,6 +1017,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         status: 'available',
         assignedEmployeeId: undefined,
         assignedEmployeeName: undefined,
+        assetUserName: undefined,
+        assignmentStatus: undefined,
         returnedDate: retDate,
         ...(condition ? { condition } : {}),
         ...(notes ? { notes } : {}),
@@ -1364,11 +1572,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
+      if (id.startsWith('usr-')) {
+        await updateDoc(doc(db, 'app_users', id), sanitizeForFirestoreUpdate({
+          ...updates,
+          updatedAt: now,
+        })).catch(() => {});
+      }
       const docRef = doc(db, 'employees', id);
       await updateDoc(docRef, sanitizeForFirestoreUpdate({
         ...updates,
         updatedAt: now,
-      }));
+      })).catch((err) => {
+        if (!id.startsWith('usr-')) throw err;
+      });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `employees/${id}`);
     }
@@ -1381,7 +1597,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      await deleteDoc(doc(db, 'employees', id));
+      if (id.startsWith('usr-')) {
+        await deleteDoc(doc(db, 'app_users', id)).catch(() => {});
+      }
+      await deleteDoc(doc(db, 'employees', id)).catch(() => {});
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `employees/${id}`);
     }
@@ -1502,6 +1721,1050 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // Helper: Chunked or batch write for large inventory operations
+  const writeBatchChunks = async (operations: Array<(batch: any) => void>) => {
+    const CHUNK_SIZE = 400;
+    for (let i = 0; i < operations.length; i += CHUNK_SIZE) {
+      const batch = writeBatch(db);
+      const slice = operations.slice(i, i + CHUNK_SIZE);
+      slice.forEach((op) => op(batch));
+      await batch.commit();
+    }
+  };
+
+  // Helper: Compute snapshot checksum for data integrity
+  const calculateAssetsChecksum = (assetList: Computer[]): string => {
+    let hash = 0;
+    const str = `${assetList.length}:${assetList.map((a) => `${a.id}_${a.assetTag}_${a.status}_${a.updatedAt}`).join(';')}`;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = (hash << 5) - hash + char;
+      hash |= 0;
+    }
+    return `chk-${Math.abs(hash).toString(16)}-${assetList.length}`;
+  };
+
+  // Helper: Load full assets for a snapshot (resolving chunks if stored separately)
+  const getFullSnapshotAssets = async (snapshot: InventorySnapshot): Promise<Computer[]> => {
+    if (snapshot.assets && snapshot.assets.length > 0) {
+      return snapshot.assets;
+    }
+    try {
+      const snapDoc = await getDocs(collection(db, `inventory_snapshots/${snapshot.id}/chunks`));
+      if (!snapDoc.empty) {
+        const chunkAssets: Computer[] = [];
+        snapDoc.forEach((d) => {
+          const data = d.data();
+          if (data.assets && Array.isArray(data.assets)) {
+            chunkAssets.push(...data.assets);
+          }
+        });
+        return chunkAssets;
+      }
+    } catch (e) {
+      console.warn('Could not read snapshot subcollection chunks:', e);
+    }
+    return snapshot.assets || [];
+  };
+
+  // Inventory Administration, Snapshots & Rollbacks
+  const createInventorySnapshot = async (params: {
+    name: string;
+    description: string;
+    operationType: SnapshotOperationType;
+    scopeCompanyId?: string;
+    scopeCompanyName?: string;
+    assetsToSnapshot?: Computer[];
+    reason?: string;
+  }): Promise<string> => {
+    const now = new Date().toISOString();
+    const snapshotId = `snp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    
+    // Determine asset scope
+    let targetAssets: Computer[] = params.assetsToSnapshot
+      ? [...params.assetsToSnapshot]
+      : [...computers];
+
+    if (params.scopeCompanyId) {
+      targetAssets = targetAssets.filter((c) => c.companyId === params.scopeCompanyId);
+    }
+
+    const checksum = calculateAssetsChecksum(targetAssets);
+    const actorName = currentUser?.fullName || 'Administrator';
+    const actorEmail = currentUser?.email || 'admin@system.internal';
+    const actorRole = (currentUser?.role as UserRole) || 'admin';
+
+    const newSnapshot: InventorySnapshot = {
+      id: snapshotId,
+      name: params.name,
+      description: params.description || `Automatic backup snapshot prior to ${params.operationType}`,
+      timestamp: now,
+      createdByName: actorName,
+      createdByEmail: actorEmail,
+      createdByRole: actorRole,
+      operationType: params.operationType,
+      affectedCount: targetAssets.length,
+      totalAssetsCount: computers.length,
+      scopeCompanyId: params.scopeCompanyId,
+      scopeCompanyName: params.scopeCompanyName,
+      status: 'active',
+      availableRecoveryActions: ['full_restore', 'selective_rollback', 'deleted_recovery'],
+      assetsCount: targetAssets.length,
+      assets: targetAssets,
+      schemaVersion: 1,
+      checksum,
+    };
+
+    // Safety verification: snapshot MUST succeed before proceeding with destructive operations
+    if (currentUser) {
+      try {
+        // If dataset is very large (> 250 items), chunk into subcollection to avoid Firestore 1MB doc limit
+        if (targetAssets.length > 250) {
+          const metaDoc = { ...newSnapshot, assets: [] };
+          await setDoc(doc(db, 'inventory_snapshots', snapshotId), sanitizeForFirestore(metaDoc));
+
+          const CHUNK_SIZE = 200;
+          for (let i = 0; i < targetAssets.length; i += CHUNK_SIZE) {
+            const chunkSlice = targetAssets.slice(i, i + CHUNK_SIZE);
+            const chunkId = `chunk_${Math.floor(i / CHUNK_SIZE)}`;
+            await setDoc(
+              doc(db, `inventory_snapshots/${snapshotId}/chunks`, chunkId),
+              sanitizeForFirestore({ index: i, assets: chunkSlice })
+            );
+          }
+        } else {
+          await setDoc(doc(db, 'inventory_snapshots', snapshotId), sanitizeForFirestore(newSnapshot));
+        }
+      } catch (err: any) {
+        console.error('Critical snapshot creation failed:', err);
+        throw new Error(`Failed to create inventory snapshot: ${err?.message || 'Database write error'}. The destructive operation was safely aborted.`);
+      }
+    }
+
+    // Record audit log
+    const auditEntry: InventoryAuditLog = {
+      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: now,
+      action: 'create_snapshot',
+      actorName,
+      actorEmail,
+      actorRole,
+      scope: params.scopeCompanyName || (params.scopeCompanyId ? 'Company Scoped' : 'Organization-Wide'),
+      affectedCount: targetAssets.length,
+      affectedAssetIds: targetAssets.slice(0, 50).map((c) => c.id),
+      details: `Created snapshot "${params.name}" (${params.operationType}) containing ${targetAssets.length} asset records. Checksum: ${checksum}. Reason: ${params.reason || 'Safety Backup'}`,
+      snapshotId,
+      status: 'success',
+    };
+
+    if (currentUser) {
+      setDoc(doc(db, 'inventory_audit_logs', auditEntry.id), sanitizeForFirestore(auditEntry)).catch((e) =>
+        console.warn('Audit log write notice:', e)
+      );
+    }
+
+    setInventorySnapshots((prev) => [newSnapshot, ...prev]);
+    setInventoryAuditLogs((prev) => [auditEntry, ...prev]);
+
+    return snapshotId;
+  };
+
+  const rollbackSelectedAssets = async (
+    snapshotId: string,
+    assetIdsToRestore: string[],
+    reason?: string
+  ): Promise<{ restoredCount: number }> => {
+    const targetSnapshot = inventorySnapshots.find((s) => s.id === snapshotId);
+    if (!targetSnapshot) {
+      throw new Error(`Snapshot with ID "${snapshotId}" was not found.`);
+    }
+
+    const snapshotAssets = await getFullSnapshotAssets(targetSnapshot);
+    const assetsToRestore = snapshotAssets.filter((a) => assetIdsToRestore.includes(a.id));
+
+    if (assetsToRestore.length === 0) {
+      throw new Error('No matching asset records found in this snapshot to restore.');
+    }
+
+    // Safeguard: Create a pre_rollback snapshot of current inventory before modifying anything
+    await createInventorySnapshot({
+      name: `Pre-Rollback State (${new Date().toLocaleDateString()})`,
+      description: `Automatic snapshot before selective rollback of ${assetsToRestore.length} assets from snapshot "${targetSnapshot.name}"`,
+      operationType: 'pre_rollback',
+      scopeCompanyId: targetSnapshot.scopeCompanyId,
+      reason: reason || 'Safety backup prior to selective rollback',
+    });
+
+    const now = new Date().toISOString();
+    const actorName = currentUser?.fullName || 'Administrator';
+    const actorRole = (currentUser?.role as UserRole) || 'admin';
+
+    if (currentUser) {
+      await writeBatchChunks(
+        assetsToRestore.map((asset) => (batch) => {
+          const restoredAsset: Computer = {
+            ...asset,
+            updatedAt: now,
+            auditHistory: [
+              {
+                id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                type: 'updated',
+                actorName,
+                actorRole,
+                message: `Selectively restored to historical version from snapshot "${targetSnapshot.name}"`,
+                timestamp: now,
+              },
+              ...(asset.auditHistory || []),
+            ],
+          };
+          const ref = doc(db, 'computers', asset.id);
+          batch.set(ref, sanitizeForFirestore(restoredAsset));
+        })
+      );
+    } else {
+      setComputers((prev) => {
+        const map = new Map(prev.map((c) => [c.id, c]));
+        assetsToRestore.forEach((a) => map.set(a.id, { ...a, updatedAt: now }));
+        return Array.from(map.values());
+      });
+    }
+
+    // Log in inventory audit
+    const auditEntry: InventoryAuditLog = {
+      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: now,
+      action: 'rollback_selected',
+      actorName,
+      actorEmail: currentUser?.email || 'admin@system.internal',
+      actorRole,
+      scope: targetSnapshot.scopeCompanyName || 'Organization-Wide',
+      affectedCount: assetsToRestore.length,
+      affectedAssetIds: assetsToRestore.map((a) => a.id),
+      details: `Rolled back ${assetsToRestore.length} selected assets to snapshot "${targetSnapshot.name}". Reason: ${reason || 'Administrator rollback'}`,
+      snapshotId,
+      status: 'success',
+    };
+
+    if (currentUser) {
+      setDoc(doc(db, 'inventory_audit_logs', auditEntry.id), sanitizeForFirestore(auditEntry)).catch(() => {});
+    }
+    setInventoryAuditLogs((prev) => [auditEntry, ...prev]);
+
+    // Save to dedicated Firestore 'auditLogs' collection via AuditLogService
+    await AuditLogService.logSnapshotRestoration({
+      actingUserId: currentUser?.id || 'usr-admin',
+      actingUserName: actorName,
+      actingUserRole: actorRole,
+      actingUserEmail: currentUser?.email || 'admin@system.internal',
+      affectedAssetCount: assetsToRestore.length,
+      snapshotId,
+      restorationType: 'selective',
+      restoredCount: assetsToRestore.length,
+      reason,
+      details: `Rolled back ${assetsToRestore.length} selected assets to snapshot "${targetSnapshot.name}". Reason: ${reason || 'Administrator rollback'}`,
+      metadata: { targetSnapshotName: targetSnapshot.name, assetIds: assetsToRestore.map((a) => a.id) },
+    }).catch((e) => console.warn('AuditLogService logSnapshotRestoration notice:', e));
+
+    return { restoredCount: assetsToRestore.length };
+  };
+
+  const restoreFullInventorySnapshot = async (
+    snapshotId: string,
+    previewOnly: boolean = false
+  ): Promise<{ restoredCount: number; updatedCount: number; removedCount: number }> => {
+    const targetSnapshot = inventorySnapshots.find((s) => s.id === snapshotId);
+    if (!targetSnapshot) {
+      throw new Error(`Snapshot with ID "${snapshotId}" was not found.`);
+    }
+
+    const snapshotAssets = await getFullSnapshotAssets(targetSnapshot);
+    const currentMap = new Map(computers.map((c) => [c.id, c]));
+    const snapshotMap = new Map(snapshotAssets.map((c) => [c.id, c]));
+
+    let restoredCount = 0; // In snapshot but missing from active
+    let updatedCount = 0;  // In both but modified
+    let removedCount = 0;  // In active within scope but missing from snapshot
+
+    const targetScopeCompany = targetSnapshot.scopeCompanyId;
+    const activeAssetsInScope = targetScopeCompany
+      ? computers.filter((c) => c.companyId === targetScopeCompany)
+      : computers;
+
+    snapshotAssets.forEach((snapAsset) => {
+      const current = currentMap.get(snapAsset.id);
+      if (!current) {
+        restoredCount++;
+      } else if (
+        current.status !== snapAsset.status ||
+        current.condition !== snapAsset.condition ||
+        current.assignedEmployeeName !== snapAsset.assignedEmployeeName ||
+        current.serialNumber !== snapAsset.serialNumber ||
+        current.model !== snapAsset.model
+      ) {
+        updatedCount++;
+      }
+    });
+
+    activeAssetsInScope.forEach((currAsset) => {
+      if (!snapshotMap.has(currAsset.id)) {
+        removedCount++;
+      }
+    });
+
+    if (previewOnly) {
+      return { restoredCount, updatedCount, removedCount };
+    }
+
+    // Safety: Backup current state before restoring full inventory
+    await createInventorySnapshot({
+      name: `Pre-Full Restore Backup (${new Date().toLocaleDateString()})`,
+      description: `Safety snapshot created immediately prior to restoring full snapshot "${targetSnapshot.name}"`,
+      operationType: 'pre_rollback',
+      scopeCompanyId: targetScopeCompany,
+      reason: `Safety backup prior to full restoration of snapshot ${snapshotId}`,
+    });
+
+    const now = new Date().toISOString();
+    const actorName = currentUser?.fullName || 'Administrator';
+    const actorRole = (currentUser?.role as UserRole) || 'admin';
+
+    if (currentUser) {
+      const ops: Array<(batch: any) => void> = [];
+
+      // 1. Restore all snapshot assets
+      snapshotAssets.forEach((snapAsset) => {
+        const restoredAsset: Computer = {
+          ...snapAsset,
+          updatedAt: now,
+          auditHistory: [
+            {
+              id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              type: 'updated',
+              actorName,
+              actorRole,
+              message: `Full inventory restoration applied from snapshot "${targetSnapshot.name}"`,
+              timestamp: now,
+            },
+            ...(snapAsset.auditHistory || []),
+          ],
+        };
+        ops.push((batch) => {
+          batch.set(doc(db, 'computers', snapAsset.id), sanitizeForFirestore(restoredAsset));
+        });
+      });
+
+      // 2. Archive/retire assets created after snapshot within the same scope so they are cleanly set aside
+      activeAssetsInScope.forEach((currAsset) => {
+        if (!snapshotMap.has(currAsset.id)) {
+          ops.push((batch) => {
+            batch.update(doc(db, 'computers', currAsset.id), {
+              isArchived: true,
+              archivedAt: now,
+              archivedByName: actorName,
+              archivedReason: `Archived during full inventory restoration of snapshot "${targetSnapshot.name}"`,
+              status: 'retired',
+              updatedAt: now,
+            });
+          });
+        }
+      });
+
+      await writeBatchChunks(ops);
+
+      // Mark snapshot as restored
+      updateDoc(doc(db, 'inventory_snapshots', snapshotId), {
+        isRestored: true,
+        restoredAt: now,
+        restoredByName: actorName,
+      }).catch(() => {});
+    } else {
+      // Local fallback
+      setComputers(snapshotAssets);
+    }
+
+    // Record audit log
+    const auditEntry: InventoryAuditLog = {
+      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: now,
+      action: 'restore_full_snapshot',
+      actorName,
+      actorEmail: currentUser?.email || 'admin@system.internal',
+      actorRole,
+      scope: targetSnapshot.scopeCompanyName || 'Organization-Wide',
+      affectedCount: snapshotAssets.length,
+      details: `Restored full hardware inventory to snapshot "${targetSnapshot.name}". Restored ${restoredCount} missing, updated ${updatedCount} altered, archived ${removedCount} newer records.`,
+      snapshotId,
+      status: 'success',
+    };
+
+    if (currentUser) {
+      setDoc(doc(db, 'inventory_audit_logs', auditEntry.id), sanitizeForFirestore(auditEntry)).catch(() => {});
+    }
+    setInventoryAuditLogs((prev) => [auditEntry, ...prev]);
+
+    // Save to dedicated Firestore 'auditLogs' collection via AuditLogService
+    await AuditLogService.logSnapshotRestoration({
+      actingUserId: currentUser?.id || 'usr-admin',
+      actingUserName: actorName,
+      actingUserRole: actorRole,
+      actingUserEmail: currentUser?.email || 'admin@system.internal',
+      affectedAssetCount: snapshotAssets.length,
+      snapshotId,
+      restorationType: 'full',
+      restoredCount,
+      updatedCount,
+      removedCount,
+      details: `Restored full hardware inventory to snapshot "${targetSnapshot.name}". Restored ${restoredCount} missing, updated ${updatedCount} altered, archived ${removedCount} newer records.`,
+      metadata: { targetSnapshotName: targetSnapshot.name, restoredCount, updatedCount, removedCount },
+    }).catch((e) => console.warn('AuditLogService logSnapshotRestoration notice:', e));
+
+    return { restoredCount, updatedCount, removedCount };
+  };
+
+  const restoreDeletedAssets = async (
+    snapshotId: string,
+    assetIdsToRecover: string[]
+  ): Promise<{ recoveredCount: number }> => {
+    const targetSnapshot = inventorySnapshots.find((s) => s.id === snapshotId);
+    if (!targetSnapshot) {
+      throw new Error(`Snapshot with ID "${snapshotId}" was not found.`);
+    }
+
+    const snapshotAssets = await getFullSnapshotAssets(targetSnapshot);
+    const assetsToRecover = snapshotAssets.filter((a) => assetIdsToRecover.includes(a.id));
+
+    if (assetsToRecover.length === 0) {
+      throw new Error('No matching asset records found to recover.');
+    }
+
+    // Safety: Backup before recovering deleted assets
+    await createInventorySnapshot({
+      name: `Pre-Recovery Backup (${new Date().toLocaleDateString()})`,
+      description: `Automatic snapshot before recovering ${assetsToRecover.length} previously deleted assets from snapshot "${targetSnapshot.name}"`,
+      operationType: 'pre_rollback',
+      scopeCompanyId: targetSnapshot.scopeCompanyId,
+      reason: 'Safety backup before recovering deleted hardware assets',
+    });
+
+    const now = new Date().toISOString();
+    const actorName = currentUser?.fullName || 'Administrator';
+    const actorRole = (currentUser?.role as UserRole) || 'admin';
+
+    if (currentUser) {
+      await writeBatchChunks(
+        assetsToRecover.map((asset) => (batch) => {
+          const recoveredAsset: Computer = {
+            ...asset,
+            isArchived: false,
+            archivedAt: undefined,
+            archivedByName: undefined,
+            archivedReason: undefined,
+            updatedAt: now,
+            auditHistory: [
+              {
+                id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                type: 'created',
+                actorName,
+                actorRole,
+                message: `Recovered deleted hardware asset from snapshot "${targetSnapshot.name}" with original Asset ID and specs`,
+                timestamp: now,
+              },
+              ...(asset.auditHistory || []),
+            ],
+          };
+          batch.set(doc(db, 'computers', asset.id), sanitizeForFirestore(recoveredAsset));
+        })
+      );
+    } else {
+      setComputers((prev) => [...prev, ...assetsToRecover]);
+    }
+
+    // Record audit log
+    const auditEntry: InventoryAuditLog = {
+      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: now,
+      action: 'restore_deleted_assets',
+      actorName,
+      actorEmail: currentUser?.email || 'admin@system.internal',
+      actorRole,
+      scope: targetSnapshot.scopeCompanyName || 'Organization-Wide',
+      affectedCount: assetsToRecover.length,
+      affectedAssetIds: assetsToRecover.map((a) => a.id),
+      details: `Recovered ${assetsToRecover.length} deleted assets from snapshot "${targetSnapshot.name}" retaining original IDs and specs.`,
+      snapshotId,
+      status: 'success',
+    };
+
+    if (currentUser) {
+      setDoc(doc(db, 'inventory_audit_logs', auditEntry.id), sanitizeForFirestore(auditEntry)).catch(() => {});
+    }
+    setInventoryAuditLogs((prev) => [auditEntry, ...prev]);
+
+    // Save to dedicated Firestore 'auditLogs' collection via AuditLogService
+    await AuditLogService.logSnapshotRestoration({
+      actingUserId: currentUser?.id || 'usr-admin',
+      actingUserName: actorName,
+      actingUserRole: actorRole,
+      actingUserEmail: currentUser?.email || 'admin@system.internal',
+      affectedAssetCount: assetsToRecover.length,
+      snapshotId,
+      restorationType: 'deleted_assets',
+      restoredCount: assetsToRecover.length,
+      details: `Recovered ${assetsToRecover.length} deleted assets from snapshot "${targetSnapshot.name}" retaining original IDs and specs.`,
+      metadata: { targetSnapshotName: targetSnapshot.name, assetIds: assetsToRecover.map((a) => a.id) },
+    }).catch((e) => console.warn('AuditLogService logSnapshotRestoration notice:', e));
+
+    return { recoveredCount: assetsToRecover.length };
+  };
+
+  const deleteInventorySnapshot = async (snapshotId: string): Promise<void> => {
+    if (currentUser?.role !== 'admin') {
+      throw new Error('Unauthorized: Only administrators can manage or delete inventory snapshots.');
+    }
+
+    const targetSnapshot = inventorySnapshots.find((s) => s.id === snapshotId);
+    if (!targetSnapshot) return;
+
+    if (currentUser) {
+      try {
+        await deleteDoc(doc(db, 'inventory_snapshots', snapshotId));
+      } catch (err) {
+        console.warn('Snapshot deletion error:', err);
+      }
+    }
+
+    setInventorySnapshots((prev) => prev.filter((s) => s.id !== snapshotId));
+
+    // Audit log
+    const auditEntry: InventoryAuditLog = {
+      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: new Date().toISOString(),
+      action: 'delete_asset',
+      actorName: currentUser?.fullName || 'Administrator',
+      actorEmail: currentUser?.email || 'admin@system.internal',
+      actorRole: 'admin',
+      scope: 'Organization-Wide',
+      affectedCount: 1,
+      details: `Removed historical snapshot "${targetSnapshot.name}" (${snapshotId}).`,
+      snapshotId,
+      status: 'success',
+    };
+    if (currentUser) {
+      setDoc(doc(db, 'inventory_audit_logs', auditEntry.id), sanitizeForFirestore(auditEntry)).catch(() => {});
+    }
+    setInventoryAuditLogs((prev) => [auditEntry, ...prev]);
+  };
+
+  // Bulk Inventory Operations
+  const bulkArchiveAssets = async (assetIds: string[], reason?: string): Promise<number> => {
+    if (assetIds.length === 0) return 0;
+
+    const targetAssets = computers.filter((c) => assetIds.includes(c.id));
+    if (targetAssets.length === 0) return 0;
+
+    // Snapshot before archiving
+    await createInventorySnapshot({
+      name: `Pre-Bulk Archive (${new Date().toLocaleDateString()})`,
+      description: `Automatic snapshot before archiving ${targetAssets.length} assets`,
+      operationType: 'pre_bulk_update',
+      assetsToSnapshot: targetAssets,
+      reason: reason || 'Safety backup prior to bulk archive',
+    });
+
+    const now = new Date().toISOString();
+    const actorName = currentUser?.fullName || 'Administrator';
+    const actorRole = (currentUser?.role as UserRole) || 'admin';
+
+    if (currentUser) {
+      await writeBatchChunks(
+        targetAssets.map((asset) => (batch) => {
+          batch.update(doc(db, 'computers', asset.id), {
+            isArchived: true,
+            archivedAt: now,
+            archivedByName: actorName,
+            archivedReason: reason || 'Bulk archive by administrator',
+            status: 'retired',
+            updatedAt: now,
+          });
+        })
+      );
+    } else {
+      setComputers((prev) =>
+        prev.map((c) =>
+          assetIds.includes(c.id)
+            ? { ...c, isArchived: true, archivedAt: now, archivedByName: actorName, status: 'retired', updatedAt: now }
+            : c
+        )
+      );
+    }
+
+    const auditEntry: InventoryAuditLog = {
+      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: now,
+      action: 'bulk_archive',
+      actorName,
+      actorEmail: currentUser?.email || 'admin@system.internal',
+      actorRole,
+      scope: 'Selected Assets',
+      affectedCount: targetAssets.length,
+      affectedAssetIds: targetAssets.map((a) => a.id),
+      details: `Archived ${targetAssets.length} hardware assets. Reason: ${reason || 'Bulk administrative action'}`,
+      status: 'success',
+    };
+
+    if (currentUser) {
+      setDoc(doc(db, 'inventory_audit_logs', auditEntry.id), sanitizeForFirestore(auditEntry)).catch(() => {});
+    }
+    setInventoryAuditLogs((prev) => [auditEntry, ...prev]);
+
+    // Save to dedicated Firestore 'auditLogs' collection via AuditLogService
+    await AuditLogService.recordAction({
+      action: 'bulk_archive',
+      actingUserId: currentUser?.id || 'usr-admin',
+      actingUserName: actorName,
+      actingUserRole: actorRole,
+      actingUserEmail: currentUser?.email || 'admin@system.internal',
+      affectedAssetCount: targetAssets.length,
+      affectedAssetIds: targetAssets.map((a) => a.id),
+      scope: 'Selected Assets',
+      details: `Archived ${targetAssets.length} hardware assets. Reason: ${reason || 'Bulk administrative action'}`,
+    }).catch((e) => console.warn('AuditLogService recordAction notice:', e));
+
+    return targetAssets.length;
+  };
+
+  const bulkDeleteAssets = async (
+    assetIds: string[],
+    confirmationWord: string,
+    reason?: string
+  ): Promise<number> => {
+    if (confirmationWord.trim().toUpperCase() !== 'DELETE') {
+      throw new Error('Confirmation mismatch: You must explicitly type "DELETE" to permanently remove assets.');
+    }
+
+    if (assetIds.length === 0) return 0;
+
+    const targetAssets = computers.filter((c) => assetIds.includes(c.id));
+    if (targetAssets.length === 0) return 0;
+
+    // Safeguard: Check IT Admin authorization scope
+    const isSuperAdmin =
+      currentUser?.email === 'rahulprashad80@gmail.com' ||
+      currentUser?.username === 'rahulprasad' ||
+      (!currentUser?.companyId && currentUser?.username !== 'sameertupe');
+
+    if (!isSuperAdmin) {
+      const authorizedCompanyId = currentUser?.companyId || 'comp-agipl';
+      const unauthorized = targetAssets.filter((c) => c.companyId && c.companyId !== authorizedCompanyId);
+      if (unauthorized.length > 0) {
+        throw new Error(
+          `Unauthorized: As an IT Admin, you can only delete hardware assets within your assigned company (${authorizedCompanyId}). Found ${unauthorized.length} assets outside your scope.`
+        );
+      }
+    }
+
+    // MANDATORY REQUIREMENT: Create recoverable snapshot BEFORE destructive deletion.
+    // If snapshot fails, the exception will halt execution and prevent deletion!
+    const snapshotId = await createInventorySnapshot({
+      name: `Pre-Bulk Delete Backup (${new Date().toLocaleDateString()})`,
+      description: `Automatic recoverable snapshot before deleting ${targetAssets.length} assets. Reason: ${reason || 'Bulk deletion'}`,
+      operationType: 'pre_bulk_delete',
+      assetsToSnapshot: targetAssets,
+      reason: reason || 'Automatic safeguard backup prior to asset deletion',
+    });
+
+    const now = new Date().toISOString();
+    const actorName = currentUser?.fullName || 'Administrator';
+    const actorRole = (currentUser?.role as UserRole) || 'admin';
+
+    // Delete ONLY from computers collection. Helpdesk tickets, employees, accounts, attachments are strictly preserved!
+    if (currentUser) {
+      await writeBatchChunks(
+        targetAssets.map((asset) => (batch) => {
+          batch.delete(doc(db, 'computers', asset.id));
+        })
+      );
+    } else {
+      setComputers((prev) => prev.filter((c) => !assetIds.includes(c.id)));
+    }
+
+    const auditEntry: InventoryAuditLog = {
+      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: now,
+      action: 'bulk_delete',
+      actorName,
+      actorEmail: currentUser?.email || 'admin@system.internal',
+      actorRole,
+      scope: isSuperAdmin ? 'Organization-Wide' : 'Company Scoped',
+      affectedCount: targetAssets.length,
+      affectedAssetIds: targetAssets.map((a) => a.id),
+      details: `Permanently removed ${targetAssets.length} hardware assets. Pre-deletion recoverable snapshot created with ID: ${snapshotId}. Reason: ${reason || 'Administrator bulk deletion'}`,
+      snapshotId,
+      status: 'success',
+    };
+
+    if (currentUser) {
+      setDoc(doc(db, 'inventory_audit_logs', auditEntry.id), sanitizeForFirestore(auditEntry)).catch(() => {});
+    }
+    setInventoryAuditLogs((prev) => [auditEntry, ...prev]);
+
+    // Save to dedicated Firestore 'auditLogs' collection via AuditLogService
+    await AuditLogService.logBulkDeletion({
+      actingUserId: currentUser?.id || 'usr-admin',
+      actingUserName: actorName,
+      actingUserRole: actorRole,
+      actingUserEmail: currentUser?.email || 'admin@system.internal',
+      affectedAssetCount: targetAssets.length,
+      assetIds: targetAssets.map((a) => a.id),
+      isClearAll: false,
+      scope: isSuperAdmin ? 'Organization-Wide' : 'Company Scoped',
+      reason,
+      snapshotId,
+      details: `Permanently removed ${targetAssets.length} hardware assets. Pre-deletion recoverable snapshot created with ID: ${snapshotId}. Reason: ${reason || 'Administrator bulk deletion'}`,
+    }).catch((e) => console.warn('AuditLogService logBulkDeletion notice:', e));
+
+    return targetAssets.length;
+  };
+
+  const clearAllInventory = async (
+    confirmationWord: string,
+    reason?: string,
+    targetCompanyId?: string
+  ): Promise<number> => {
+    if (confirmationWord.trim().toUpperCase() !== 'DELETE') {
+      throw new Error('Confirmation mismatch: You must explicitly type "DELETE" to clear inventory records.');
+    }
+
+    const isSuperAdmin =
+      currentUser?.email === 'rahulprashad80@gmail.com' ||
+      currentUser?.username === 'rahulprasad' ||
+      (!currentUser?.companyId && currentUser?.username !== 'sameertupe');
+
+    // Super Admin can clear org-wide; IT Admin is strictly restricted to their company scope
+    let assetsToClear = [...computers];
+    if (!isSuperAdmin) {
+      const authorizedCompanyId = currentUser?.companyId || 'comp-agipl';
+      assetsToClear = computers.filter((c) => c.companyId === authorizedCompanyId);
+      if (assetsToClear.length === 0) {
+        throw new Error('No assets found in your authorized company scope to clear.');
+      }
+    } else if (targetCompanyId) {
+      assetsToClear = computers.filter((c) => c.companyId === targetCompanyId);
+    }
+
+    if (assetsToClear.length === 0) {
+      return 0;
+    }
+
+    // MANDATORY REQUIREMENT: Create recoverable snapshot BEFORE clearing.
+    // If snapshot creation fails, the function throws and execution halts immediately!
+    const snapshotId = await createInventorySnapshot({
+      name: `Pre-Inventory Clear (${new Date().toLocaleDateString()})`,
+      description: `Comprehensive recoverable backup taken immediately prior to clearing ${assetsToClear.length} inventory assets.`,
+      operationType: 'pre_clear',
+      assetsToSnapshot: assetsToClear,
+      scopeCompanyId: isSuperAdmin ? targetCompanyId : (currentUser?.companyId || 'comp-agipl'),
+      reason: reason || 'Inventory reset/clear operation',
+    });
+
+    const now = new Date().toISOString();
+    const actorName = currentUser?.fullName || 'Administrator';
+    const actorRole = (currentUser?.role as UserRole) || 'admin';
+
+    // Clear ONLY computers. NEVER touch employees, tickets, or user accounts!
+    if (currentUser) {
+      await writeBatchChunks(
+        assetsToClear.map((asset) => (batch) => {
+          batch.delete(doc(db, 'computers', asset.id));
+        })
+      );
+    } else {
+      const clearIds = new Set(assetsToClear.map((c) => c.id));
+      setComputers((prev) => prev.filter((c) => !clearIds.has(c.id)));
+    }
+
+    const auditEntry: InventoryAuditLog = {
+      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: now,
+      action: 'clear_inventory',
+      actorName,
+      actorEmail: currentUser?.email || 'admin@system.internal',
+      actorRole,
+      scope: isSuperAdmin && !targetCompanyId ? 'Organization-Wide (ALL COMPANIES)' : `Company: ${targetCompanyId || currentUser?.companyId}`,
+      affectedCount: assetsToClear.length,
+      details: `Cleared ${assetsToClear.length} hardware inventory records. Recoverable snapshot created: ${snapshotId}. Ticket references and employee accounts preserved. Reason: ${reason || 'Administrator clearing'}`,
+      snapshotId,
+      status: 'success',
+    };
+
+    if (currentUser) {
+      setDoc(doc(db, 'inventory_audit_logs', auditEntry.id), sanitizeForFirestore(auditEntry)).catch(() => {});
+    }
+    setInventoryAuditLogs((prev) => [auditEntry, ...prev]);
+
+    // Save to dedicated Firestore 'auditLogs' collection via AuditLogService
+    await AuditLogService.logBulkDeletion({
+      actingUserId: currentUser?.id || 'usr-admin',
+      actingUserName: actorName,
+      actingUserRole: actorRole,
+      actingUserEmail: currentUser?.email || 'admin@system.internal',
+      affectedAssetCount: assetsToClear.length,
+      assetIds: assetsToClear.map((a) => a.id),
+      isClearAll: true,
+      scope: isSuperAdmin && !targetCompanyId ? 'Organization-Wide (ALL COMPANIES)' : `Company: ${targetCompanyId || currentUser?.companyId}`,
+      reason,
+      snapshotId,
+      details: `Cleared ${assetsToClear.length} hardware inventory records. Recoverable snapshot created: ${snapshotId}. Ticket references and employee accounts preserved. Reason: ${reason || 'Administrator clearing'}`,
+    }).catch((e) => console.warn('AuditLogService logBulkDeletion notice:', e));
+
+    return assetsToClear.length;
+  };
+
+  const bulkUpdateAssets = async (
+    assetIds: string[],
+    updates: Partial<Computer>,
+    reason?: string
+  ): Promise<number> => {
+    if (assetIds.length === 0) return 0;
+    const targetAssets = computers.filter((c) => assetIds.includes(c.id));
+    if (targetAssets.length === 0) return 0;
+
+    // Snapshot before updating
+    await createInventorySnapshot({
+      name: `Pre-Bulk Update (${new Date().toLocaleDateString()})`,
+      description: `Automatic snapshot before bulk updating ${targetAssets.length} assets`,
+      operationType: 'pre_bulk_update',
+      assetsToSnapshot: targetAssets,
+      reason: reason || 'Safety backup prior to bulk update',
+    });
+
+    const now = new Date().toISOString();
+    const actorName = currentUser?.fullName || 'Administrator';
+    const actorRole = (currentUser?.role as UserRole) || 'admin';
+
+    if (currentUser) {
+      await writeBatchChunks(
+        targetAssets.map((asset) => (batch) => {
+          batch.update(doc(db, 'computers', asset.id), sanitizeForFirestoreUpdate({
+            ...updates,
+            updatedAt: now,
+          }));
+        })
+      );
+    } else {
+      setComputers((prev) =>
+        prev.map((c) => (assetIds.includes(c.id) ? { ...c, ...updates, updatedAt: now } : c))
+      );
+    }
+
+    const auditEntry: InventoryAuditLog = {
+      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: now,
+      action: 'bulk_update',
+      actorName,
+      actorEmail: currentUser?.email || 'admin@system.internal',
+      actorRole,
+      scope: 'Selected Assets',
+      affectedCount: targetAssets.length,
+      affectedAssetIds: targetAssets.map((a) => a.id),
+      details: `Bulk updated ${targetAssets.length} assets with: ${Object.keys(updates).join(', ')}. Reason: ${reason || 'Bulk modification'}`,
+      status: 'success',
+    };
+
+    if (currentUser) {
+      setDoc(doc(db, 'inventory_audit_logs', auditEntry.id), sanitizeForFirestore(auditEntry)).catch(() => {});
+    }
+    setInventoryAuditLogs((prev) => [auditEntry, ...prev]);
+
+    // Save to dedicated Firestore 'auditLogs' collection via AuditLogService
+    await AuditLogService.recordAction({
+      action: 'bulk_update',
+      actingUserId: currentUser?.id || 'usr-admin',
+      actingUserName: actorName,
+      actingUserRole: actorRole,
+      actingUserEmail: currentUser?.email || 'admin@system.internal',
+      affectedAssetCount: targetAssets.length,
+      affectedAssetIds: targetAssets.map((a) => a.id),
+      scope: 'Selected Assets',
+      details: `Bulk updated ${targetAssets.length} assets with: ${Object.keys(updates).join(', ')}. Reason: ${reason || 'Bulk modification'}`,
+      metadata: { fields: Object.keys(updates) },
+    }).catch((e) => console.warn('AuditLogService recordAction notice:', e));
+
+    return targetAssets.length;
+  };
+
+  // Safe Schema Upgrade
+  const upgradeInventorySchema = async (targetVersion: number = 2): Promise<{
+    success: boolean;
+    upgradedCount: number;
+    preview: SchemaUpgradePreview;
+  }> => {
+    if (computers.length === 0) {
+      const emptyPreview: SchemaUpgradePreview = {
+        currentVersion: 1,
+        targetVersion,
+        totalAssets: 0,
+        addedFields: ['schemaVersion', 'procurementType', 'customFields', 'isArchived'],
+        modifiedFields: ['manufacturer', 'processor', 'windowsVersion'],
+        normalizedCount: 0,
+        backfilledCount: 0,
+        preservedUnknownCount: 0,
+        sampleUpgradedAssets: [],
+      };
+      return { success: true, upgradedCount: 0, preview: emptyPreview };
+    }
+
+    // MANDATORY REQUIREMENT: Backup existing inventory before applying schema upgrade
+    const snapshotId = await createInventorySnapshot({
+      name: `Pre-Schema Upgrade v${targetVersion} Backup`,
+      description: `Complete inventory snapshot before migrating schema to version ${targetVersion}`,
+      operationType: 'pre_upgrade',
+      reason: `Automated safety backup prior to inventory schema migration to v${targetVersion}`,
+    });
+
+    const now = new Date().toISOString();
+    let normalizedCount = 0;
+    let backfilledCount = 0;
+    let preservedUnknownCount = 0;
+
+    const upgradedAssets: Computer[] = computers.map((asset) => {
+      let isNormalized = false;
+      let isBackfilled = false;
+
+      // 1. Normalize aliases to 28 standard fields without losing original data
+      const manufacturer = asset.manufacturer || asset.brand || 'Generic';
+      const processor = asset.processor || asset.cpu || '';
+      const procurementType = asset.procurementType || asset.newOrOld || 'New (NH)';
+      const windowsVersion = asset.windowsVersion || asset.os || '';
+      const warrantyEnd = asset.warrantyEnd || asset.warrantyExpiration || '';
+
+      if (!asset.manufacturer || !asset.processor || !asset.procurementType) {
+        isNormalized = true;
+      }
+
+      // 2. Preserve any unknown or custom fields in customFields map
+      const standardKeys = new Set([
+        'id', 'assetTag', 'companyId', 'company', 'type', 'assetNumber',
+        'condition', 'assignedEmployeeName', 'assetUserName', 'departmentId',
+        'department', 'location', 'ipAddress', 'serialNumber', 'brand',
+        'manufacturer', 'model', 'cpu', 'processor', 'purchaseDate',
+        'procurementType', 'newOrOld', 'storage', 'ram', 'os', 'windowsVersion',
+        'msOffice', 'escan', 'motherboard', 'display', 'displaySize', 'lanCard',
+        'upsBattery', 'warrantyStart', 'warrantyExpiration', 'warrantyEnd',
+        'hostname', 'specs', 'purchaseCost', 'vendor', 'status',
+        'assignedEmployeeId', 'assignedDate', 'returnedDate', 'attachments',
+        'auditHistory', 'notes', 'createdAt', 'updatedAt', 'isArchived',
+        'archivedAt', 'archivedByName', 'archivedReason', 'schemaVersion', 'customFields'
+      ]);
+
+      const extractedCustom: Record<string, any> = { ...(asset.customFields || {}) };
+      Object.entries(asset).forEach(([key, val]) => {
+        if (!standardKeys.has(key) && val !== undefined) {
+          extractedCustom[key] = val;
+          preservedUnknownCount++;
+        }
+      });
+
+      // 3. Backfill defaults for missing required standard fields
+      const assetNumber = asset.assetNumber || asset.assetTag;
+      if (!asset.assetNumber) isBackfilled = true;
+
+      if (isNormalized) normalizedCount++;
+      if (isBackfilled) backfilledCount++;
+
+      return {
+        ...asset,
+        schemaVersion: targetVersion,
+        manufacturer,
+        brand: manufacturer,
+        processor,
+        cpu: processor,
+        procurementType,
+        newOrOld: procurementType,
+        windowsVersion,
+        os: windowsVersion,
+        warrantyEnd,
+        warrantyExpiration: warrantyEnd || asset.warrantyExpiration,
+        assetNumber,
+        customFields: extractedCustom,
+        updatedAt: now,
+      };
+    });
+
+    const preview: SchemaUpgradePreview = {
+      currentVersion: 1,
+      targetVersion,
+      totalAssets: computers.length,
+      addedFields: [
+        'schemaVersion',
+        'procurementType',
+        'windowsVersion',
+        'customFields',
+        'isArchived',
+        'assetNumber'
+      ],
+      modifiedFields: ['manufacturer', 'processor', 'windowsVersion', 'warrantyEnd'],
+      normalizedCount,
+      backfilledCount,
+      preservedUnknownCount,
+      sampleUpgradedAssets: upgradedAssets.slice(0, 5),
+    };
+
+    // Apply upgrade to database
+    if (currentUser) {
+      await writeBatchChunks(
+        upgradedAssets.map((asset) => (batch) => {
+          batch.set(doc(db, 'computers', asset.id), sanitizeForFirestore(asset));
+        })
+      );
+    } else {
+      setComputers(upgradedAssets);
+    }
+
+    // Record audit log
+    const auditEntry: InventoryAuditLog = {
+      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: now,
+      action: 'upgrade_schema',
+      actorName: currentUser?.fullName || 'Administrator',
+      actorEmail: currentUser?.email || 'admin@system.internal',
+      actorRole: (currentUser?.role as UserRole) || 'admin',
+      scope: 'Organization-Wide',
+      affectedCount: upgradedAssets.length,
+      details: `Upgraded inventory schema to version ${targetVersion}. Normalized ${normalizedCount} assets, backfilled ${backfilledCount}, preserved ${preservedUnknownCount} custom fields. Pre-upgrade snapshot ID: ${snapshotId}`,
+      snapshotId,
+      status: 'success',
+      metadata: { targetVersion, normalizedCount, backfilledCount },
+    };
+
+    if (currentUser) {
+      setDoc(doc(db, 'inventory_audit_logs', auditEntry.id), sanitizeForFirestore(auditEntry)).catch(() => {});
+    }
+    setInventoryAuditLogs((prev) => [auditEntry, ...prev]);
+
+    // Save to dedicated Firestore 'auditLogs' collection via AuditLogService
+    await AuditLogService.logInventoryUpgrade({
+      actingUserId: currentUser?.id || 'usr-admin',
+      actingUserName: currentUser?.fullName || 'Administrator',
+      actingUserRole: (currentUser?.role as UserRole) || 'admin',
+      actingUserEmail: currentUser?.email || 'admin@system.internal',
+      affectedAssetCount: upgradedAssets.length,
+      targetVersion,
+      normalizedCount,
+      backfilledCount,
+      preservedUnknownCount,
+      snapshotId,
+      details: `Upgraded inventory schema to version ${targetVersion}. Normalized ${normalizedCount} assets, backfilled ${backfilledCount}, preserved ${preservedUnknownCount} custom fields. Pre-upgrade snapshot ID: ${snapshotId}`,
+      metadata: { targetVersion, normalizedCount, backfilledCount, preservedUnknownCount },
+    }).catch((e) => console.warn('AuditLogService logInventoryUpgrade notice:', e));
+
+    return {
+      success: true,
+      upgradedCount: upgradedAssets.length,
+      preview,
+    };
+  };
+
   // Safe Seeding / Master Data Synchronization
   const seedDatabase = async (_force: boolean = false): Promise<void> => {
     setIsSeeding(true);
@@ -1554,6 +2817,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         createEmployee,
         updateEmployee,
         deleteEmployee,
+        inventorySnapshots,
+        inventoryAuditLogs,
+        auditLogs,
+        recordAuditLog: (params: RecordActionParams) => AuditLogService.recordAction(params),
+        createInventorySnapshot,
+        rollbackSelectedAssets,
+        restoreFullInventorySnapshot,
+        restoreDeletedAssets,
+        deleteInventorySnapshot,
+        bulkArchiveAssets,
+        bulkDeleteAssets,
+        clearAllInventory,
+        bulkUpdateAssets,
+        upgradeInventorySchema,
         seedDatabase,
         isSeeding,
         isLiveSync,

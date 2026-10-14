@@ -57,6 +57,10 @@ export const Header: React.FC<HeaderProps> = ({
       title: 'Computer Inventory',
       subtitle: 'Track hardware assets, specifications, warranties, and employee assignments',
     },
+    inventory_history: {
+      title: 'Inventory Rollback & Version History',
+      subtitle: 'Audit trail, point-in-time recovery, schema upgrades, and snapshot differentials',
+    },
     companies: {
       title: 'Corporate Entities',
       subtitle: 'Manage corporate organizations and enterprise subsidiaries',

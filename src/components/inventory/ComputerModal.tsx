@@ -69,10 +69,12 @@ export const ComputerModal: React.FC<ComputerModalProps> = ({ computer, isOpen, 
   const [attachments, setAttachments] = useState<ComputerAttachment[]>([]);
   const [newAttachmentCategory, setNewAttachmentCategory] = useState<'invoice' | 'warranty' | 'photo' | 'other'>('invoice');
 
+  const [isEmployeeTouched, setIsEmployeeTouched] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
+    setIsEmployeeTouched(false);
     if (computer) {
       setAssetTag(computer.assetTag);
       setSerialNumber(computer.serialNumber || '');
@@ -92,7 +94,22 @@ export const ComputerModal: React.FC<ComputerModalProps> = ({ computer, isOpen, 
       setLocation(computer.location || '');
       setCondition(computer.condition || 'good');
       setStatus(computer.status || 'available');
-      setAssignedEmployeeId(computer.assignedEmployeeId || '');
+      
+      // Auto-resolve assigned employee from ID or username/name
+      if (computer.assignedEmployeeId) {
+        setAssignedEmployeeId(computer.assignedEmployeeId);
+      } else if (computer.assetUserName || computer.assignedEmployeeName) {
+        const normU = (computer.assetUserName || '').trim().toLowerCase();
+        const normN = (computer.assignedEmployeeName || '').trim().toLowerCase();
+        const matched = employees.find(
+          (e) => (normU && e.username && e.username.trim().toLowerCase() === normU) ||
+                 (normN && e.fullName && e.fullName.trim().toLowerCase() === normN)
+        );
+        setAssignedEmployeeId(matched ? matched.id : '');
+      } else {
+        setAssignedEmployeeId('');
+      }
+
       setCompanyId(computer.companyId || '');
       setDepartmentId(computer.departmentId || '');
       setAssignedDate(computer.assignedDate || '');
@@ -132,10 +149,11 @@ export const ComputerModal: React.FC<ComputerModalProps> = ({ computer, isOpen, 
       setNotes('');
       setAttachments([]);
     }
-  }, [computer, isOpen, companies, departments]);
+  }, [computer, isOpen, companies, departments, employees]);
 
   // Handle employee selection: auto-sync status and date
   const handleEmployeeChange = (empId: string) => {
+    setIsEmployeeTouched(true);
     setAssignedEmployeeId(empId);
     if (empId) {
       const emp = employees.find((e) => e.id === empId);
@@ -224,6 +242,32 @@ export const ComputerModal: React.FC<ComputerModalProps> = ({ computer, isOpen, 
       setIsSubmitting(true);
       const assignedEmp = employees.find((e) => e.id === assignedEmployeeId);
 
+      // Determine assignment fields based on user action & match status
+      let finalAssignedEmployeeId: string | undefined = undefined;
+      let finalAssignedEmployeeName: string | undefined = undefined;
+      let finalAssetUserName: string | undefined = undefined;
+      let finalAssignmentStatus: string | undefined = undefined;
+
+      if (assignedEmployeeId && assignedEmp) {
+        // User selected an active employee from dropdown
+        finalAssignedEmployeeId = assignedEmp.id;
+        finalAssignedEmployeeName = assignedEmp.fullName;
+        finalAssetUserName = assignedEmp.username || undefined;
+        finalAssignmentStatus = 'matched';
+      } else if (isEmployeeTouched) {
+        // User explicitly chose to unassign asset
+        finalAssignedEmployeeId = undefined;
+        finalAssignedEmployeeName = undefined;
+        finalAssetUserName = undefined;
+        finalAssignmentStatus = undefined;
+      } else if (computer) {
+        // Preserved from prior record / Excel import pending
+        finalAssignedEmployeeId = computer.assignedEmployeeId || undefined;
+        finalAssignedEmployeeName = computer.assignedEmployeeName || undefined;
+        finalAssetUserName = computer.assetUserName || undefined;
+        finalAssignmentStatus = computer.assignmentStatus || undefined;
+      }
+
       const payload = {
         assetTag: cleanTag,
         serialNumber: cleanSerial,
@@ -243,8 +287,10 @@ export const ComputerModal: React.FC<ComputerModalProps> = ({ computer, isOpen, 
         location: location.trim() || undefined,
         condition,
         status,
-        assignedEmployeeId: assignedEmployeeId || undefined,
-        assignedEmployeeName: assignedEmp ? assignedEmp.fullName : undefined,
+        assignedEmployeeId: finalAssignedEmployeeId,
+        assignedEmployeeName: finalAssignedEmployeeName,
+        assetUserName: finalAssetUserName,
+        assignmentStatus: finalAssignmentStatus,
         companyId: companyId || undefined,
         departmentId: departmentId || undefined,
         assignedDate: assignedDate.trim() || undefined,
@@ -580,9 +626,14 @@ export const ComputerModal: React.FC<ComputerModalProps> = ({ computer, isOpen, 
                 className="w-full text-xs rounded-lg border border-slate-300 px-3 py-2 bg-white"
               >
                 <option value="">-- Unassigned (In Storage Pool) --</option>
+                {computer && !assignedEmployeeId && (computer.assetUserName || computer.assignedEmployeeName) && (
+                  <option value="" disabled className="text-amber-700 font-semibold bg-amber-50">
+                    ⚠️ Excel Import Pending: {computer.assignedEmployeeName || 'User'} {computer.assetUserName ? `(@${computer.assetUserName})` : ''}
+                  </option>
+                )}
                 {employees.map((emp) => (
                   <option key={emp.id} value={emp.id}>
-                    {emp.fullName} ({emp.jobTitle})
+                    {emp.fullName} {emp.username ? `(@${emp.username})` : ''} • {emp.jobTitle || emp.role || 'Employee'}
                   </option>
                 ))}
               </select>

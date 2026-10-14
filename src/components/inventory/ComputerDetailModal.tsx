@@ -929,7 +929,7 @@ export const ComputerDetailModal: React.FC<ComputerDetailModalProps> = ({
                 <option value="">-- Choose Employee --</option>
                 {employees.map((emp) => (
                   <option key={emp.id} value={emp.id}>
-                    {emp.fullName} ({emp.jobTitle})
+                    {emp.fullName} {emp.username ? `(@${emp.username})` : ''} • {emp.jobTitle || emp.role || 'Employee'}
                   </option>
                 ))}
               </select>

@@ -18,6 +18,7 @@ import { EmployeesView } from './components/employees/EmployeesView';
 import { ReportsView } from './components/reports/ReportsView';
 import { SettingsView } from './components/settings/SettingsView';
 import { UsersView } from './components/users/UsersView';
+import { InventoryRollbackView } from './components/inventory/InventoryRollbackView';
 import { SignInView } from './components/auth/SignInView';
 import { FirstAdminSetupView } from './components/auth/FirstAdminSetupView';
 import { ForceChangePasswordModal } from './components/auth/ForceChangePasswordModal';
@@ -62,10 +63,10 @@ const MainPortal: React.FC = () => {
 
   // Handle role restrictions on tabs
   useEffect(() => {
-    if (activeRole !== 'admin' && currentTab === 'users') {
+    if (activeRole !== 'admin' && (currentTab === 'users' || currentTab === 'inventory_history')) {
       setCurrentTab('dashboard');
     } else if (activeRole === 'employee') {
-      if (['companies', 'departments', 'employees', 'reports', 'users'].includes(currentTab)) {
+      if (['companies', 'departments', 'employees', 'reports', 'users', 'inventory_history'].includes(currentTab)) {
         setCurrentTab('dashboard');
       }
     }
@@ -109,6 +110,14 @@ const MainPortal: React.FC = () => {
               setSelectedAssetForTicket(asset.id);
               setIsNewTicketOpen(true);
             }}
+            onNavigateToHistory={() => setCurrentTab('inventory_history')}
+          />
+        );
+      case 'inventory_history':
+        return (
+          <InventoryRollbackView
+            onBackToInventory={() => setCurrentTab('inventory')}
+            onSelectComputer={(comp) => setSelectedComputer(comp)}
           />
         );
       case 'companies':

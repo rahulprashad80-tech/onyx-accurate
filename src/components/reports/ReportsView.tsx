@@ -642,7 +642,7 @@ export const ReportsView: React.FC = () => {
     const rows = technicianWorkload.map((t) => [
       `"${t.name.replace(/"/g, '""')}"`,
       t.email,
-      t.role,
+      t.role || 'technician',
       t.totalAssigned,
       t.openCount,
       t.inProgressCount,

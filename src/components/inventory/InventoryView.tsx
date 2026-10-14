@@ -16,6 +16,8 @@ import { ComputerDetailModal } from './ComputerDetailModal';
 import { ImportInventoryModal } from './ImportInventoryModal';
 import { ComputerCard } from './ComputerCard';
 import { ComputerStatusIndicator } from './ComputerStatusIndicator';
+import { InventoryAdminBar } from './InventoryAdminBar';
+import { UpgradeSchemaModal } from './UpgradeSchemaModal';
 import {
   Search,
   Plus,
@@ -44,16 +46,20 @@ import {
   FileSpreadsheet,
   LayoutGrid,
   List,
+  History,
+  Sparkles,
 } from 'lucide-react';
 
 interface InventoryViewProps {
   onSelectTicket?: (ticket: Ticket) => void;
   onOpenCreateTicketWithAsset?: (asset: Computer) => void;
+  onNavigateToHistory?: () => void;
 }
 
 export const InventoryView: React.FC<InventoryViewProps> = ({
   onSelectTicket,
   onOpenCreateTicketWithAsset,
+  onNavigateToHistory,
 }) => {
   const { activeRole, userProfile } = useAuth();
   const {
@@ -82,6 +88,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [computerToEdit, setComputerToEdit] = useState<Computer | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+
+  // Selection state for Administrative Bulk Management
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
 
   // Quick Action Dialog states
   const [computerForAssign, setComputerForAssign] = useState<Computer | null>(null);
@@ -256,6 +266,28 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     departments,
   ]);
 
+  // Selection handlers for bulk administration
+  const handleToggleSelectOne = (id: string, selected: boolean) => {
+    setSelectedAssetIds((prev) =>
+      selected ? [...prev, id] : prev.filter((item) => item !== id)
+    );
+  };
+
+  const handleSelectAllFiltered = () => {
+    if (selectedAssetIds.length === filteredComputers.length) {
+      setSelectedAssetIds([]);
+    } else {
+      setSelectedAssetIds(filteredComputers.map((c) => c.id));
+    }
+  };
+
+  const handleClearSelection = () => {
+    setSelectedAssetIds([]);
+  };
+
+  const isAllFilteredSelected =
+    filteredComputers.length > 0 && selectedAssetIds.length === filteredComputers.length;
+
   // Export to CSV
   const exportToCsv = () => {
     if (filteredComputers.length === 0) return;
@@ -337,6 +369,17 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   };
 
   // Quick Action execution
+  const openAssignDialog = (comp: Computer) => {
+    setComputerForAssign(comp);
+    const normU = (comp.assetUserName || '').trim().toLowerCase();
+    const normN = (comp.assignedEmployeeName || '').trim().toLowerCase();
+    const matched = employees.find(
+      (e) => (normU && e.username && e.username.trim().toLowerCase() === normU) ||
+             (normN && e.fullName && e.fullName.trim().toLowerCase() === normN)
+    );
+    setAssigneeId(matched ? matched.id : (comp.assignedEmployeeId || ''));
+  };
+
   const executeAssign = async () => {
     if (!computerForAssign || !assigneeId) return;
     const emp = employees.find((e) => e.id === assigneeId);
@@ -432,6 +475,19 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             Assigned Assets Only
           </span>
         </div>
+      )}
+
+      {/* Administrator Control Bar (Bulk operations, Clear, Upgrade, Selection tracking) */}
+      {isAdmin && (
+        <InventoryAdminBar
+          selectedAssetIds={selectedAssetIds}
+          totalFilteredCount={filteredComputers.length}
+          filteredAssets={filteredComputers}
+          onSelectAllFiltered={handleSelectAllFiltered}
+          onClearSelection={handleClearSelection}
+          isAllFilteredSelected={isAllFilteredSelected}
+          onOpenUpgradeModal={() => setIsUpgradeModalOpen(true)}
+        />
       )}
 
       {/* 1. Inventory Dashboard Metrics */}
@@ -636,8 +692,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             )}
           </div>
 
-          {/* Action Buttons: Add Asset, Import Inventory, & CSV Export */}
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Action Buttons: Add Asset, Import Inventory, Rollback History, & CSV Export */}
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             {/* Import Inventory */}
             {canManage && (
               <button
@@ -648,6 +704,32 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               >
                 <FileSpreadsheet className="w-3.5 h-3.5" />
                 <span>Import Inventory</span>
+              </button>
+            )}
+
+            {/* Rollback & Version History (Admin) */}
+            {isAdmin && onNavigateToHistory && (
+              <button
+                type="button"
+                onClick={onNavigateToHistory}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 shadow-2xs cursor-pointer transition-colors"
+                title="View snapshots, compare diffs, and perform inventory rollback"
+              >
+                <History className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Rollback & History</span>
+              </button>
+            )}
+
+            {/* Upgrade Schema (Admin) */}
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setIsUpgradeModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 shadow-2xs cursor-pointer transition-colors"
+                title="Safe hardware inventory schema normalization and upgrade"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                <span>Upgrade Schema</span>
               </button>
             )}
 
@@ -836,10 +918,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     company={companyObj}
                     department={deptObj}
                     onSelectComputer={(c) => setSelectedComputer(c)}
-                    onAssign={(c) => {
-                      setComputerForAssign(c);
-                      setAssigneeId('');
-                    }}
+                    onAssign={(c) => openAssignDialog(c)}
                     onUnassign={(c) => {
                       setComputerForUnassign(c);
                       setUnassignCondition(c.condition || 'good');
@@ -862,6 +941,12 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     canManage={canManage}
                     isAdmin={isAdmin}
                     isEmployee={isEmployee}
+                    isSelected={selectedAssetIds.includes(comp.id)}
+                    onToggleSelect={
+                      canManage
+                        ? (sel) => handleToggleSelectOne(comp.id, sel)
+                        : undefined
+                    }
                   />
                 );
               })}
@@ -870,6 +955,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             <div className="px-4 py-3 bg-white rounded-xl border border-slate-200 text-xs text-slate-500 flex items-center justify-between shadow-2xs">
               <span>
                 Showing <strong>{filteredComputers.length}</strong> of <strong>{userVisibleComputers.length}</strong> assets
+                {selectedAssetIds.length > 0 && (
+                  <strong className="text-indigo-600 ml-2 font-semibold">
+                    ({selectedAssetIds.length} selected)
+                  </strong>
+                )}
               </span>
               <span className="text-[11px] text-slate-400">
                 Visual status indicators: In Stock, Assigned, Under Repair, Retired, Lost
@@ -882,6 +972,17 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               <table className="w-full text-left text-xs divide-y divide-slate-200">
                 <thead className="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
                   <tr>
+                    {canManage && (
+                      <th className="px-3 py-3 w-10 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isAllFilteredSelected}
+                          onChange={handleSelectAllFiltered}
+                          className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                          title="Select / Deselect all matching assets"
+                        />
+                      </th>
+                    )}
                     <th className="px-4 py-3">Asset Tag / Hostname</th>
                     <th className="px-4 py-3">Hardware Details</th>
                     <th className="px-4 py-3">Status & Condition</th>
@@ -896,12 +997,25 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     const companyObj = companies.find((c) => c.id === comp.companyId);
                     const deptObj = departments.find((d) => d.id === comp.departmentId);
                     const wStatus = getWarrantyStatus(comp);
+                    const isSelected = selectedAssetIds.includes(comp.id);
 
                     return (
                       <tr
                         key={comp.id}
-                        className="hover:bg-slate-50/80 transition-colors group"
+                        className={`hover:bg-slate-50/80 transition-colors group ${
+                          isSelected ? 'bg-indigo-50/40' : ''
+                        }`}
                       >
+                        {canManage && (
+                          <td className="px-3 py-3.5 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => handleToggleSelectOne(comp.id, e.target.checked)}
+                              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                            />
+                          </td>
+                        )}
                         {/* Asset Tag & Hostname */}
                         <td className="px-4 py-3.5">
                           <div className="flex items-center gap-2">
@@ -948,12 +1062,25 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
                         {/* Assigned Custodian */}
                         <td className="px-4 py-3.5">
-                          {comp.assignedEmployeeName ? (
+                          {comp.assignedEmployeeName || comp.assetUserName ? (
                             <div>
-                              <p className="font-medium text-slate-800">{comp.assignedEmployeeName}</p>
-                              <p className="text-[11px] text-slate-400">
-                                Assigned: {comp.assignedDate || 'In use'}
+                              <p className="font-medium text-slate-800">
+                                {comp.assignedEmployeeName || comp.assetUserName}
                               </p>
+                              {comp.assetUserName && (
+                                <p className="text-[10px] text-slate-500 font-mono">
+                                  @{comp.assetUserName}
+                                </p>
+                              )}
+                              {comp.assignmentStatus === 'pending' || (!comp.assignedEmployeeId && comp.status !== 'assigned') ? (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 mt-0.5 border border-amber-200">
+                                  Assignment Pending
+                                </span>
+                              ) : (
+                                <p className="text-[11px] text-slate-400">
+                                  Assigned: {comp.assignedDate || 'In use'}
+                                </p>
+                              )}
                             </div>
                           ) : (
                             <span className="text-[11px] text-emerald-700 font-medium">In Stock (Pool)</span>
@@ -1030,10 +1157,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                                 ) : (
                                   <button
                                     type="button"
-                                    onClick={() => {
-                                      setComputerForAssign(comp);
-                                      setAssigneeId('');
-                                    }}
+                                    onClick={() => openAssignDialog(comp)}
                                     className="p-1.5 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg cursor-pointer"
                                     title="Assign to Employee"
                                   >
@@ -1182,7 +1306,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 <option value="">-- Choose Employee --</option>
                 {employees.map((emp) => (
                   <option key={emp.id} value={emp.id}>
-                    {emp.fullName} ({emp.jobTitle})
+                    {emp.fullName} {emp.username ? `(@${emp.username})` : ''} • {emp.jobTitle || emp.role || 'Employee'}
                   </option>
                 ))}
               </select>
@@ -1368,6 +1492,14 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* Safe Schema Upgrade Modal */}
+      {isUpgradeModalOpen && (
+        <UpgradeSchemaModal
+          isOpen={isUpgradeModalOpen}
+          onClose={() => setIsUpgradeModalOpen(false)}
+        />
       )}
     </div>
   );

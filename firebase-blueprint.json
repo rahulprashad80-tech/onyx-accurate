@@ -141,6 +141,26 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["authorName", "content"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Administrative actions audit log including bulk deletions, upgrades, and snapshot restorations",
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "maxLength": 100 },
+        "actingUserId": { "type": "string", "maxLength": 128 },
+        "actingUserName": { "type": "string", "maxLength": 100 },
+        "actingUserEmail": { "type": "string", "maxLength": 254 },
+        "actingUserRole": { "type": "string", "maxLength": 50 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "affectedAssetCount": { "type": "number" },
+        "details": { "type": "string", "maxLength": 2000 },
+        "snapshotId": { "type": "string", "maxLength": 128 },
+        "scope": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "enum": ["success", "failure", "pending"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["action", "actingUserId", "timestamp", "affectedAssetCount"]
     }
   },
   "firestore": {
@@ -175,6 +195,10 @@
     "/tickets/{ticketId}/comments/{commentId}": {
       "schema": { "$ref": "TicketComment" },
       "description": "Ticket comments and updates"
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "AuditLog" },
+      "description": "Administrative actions audit log"
     }
   }
 }

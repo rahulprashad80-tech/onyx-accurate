@@ -14,6 +14,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, isOpen, 
   const { createEmployee, updateEmployee, companies, departments } = useData();
 
   const [fullName, setFullName] = useState('');
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [jobTitle, setJobTitle] = useState('');
@@ -27,15 +28,17 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, isOpen, 
   useEffect(() => {
     if (employee) {
       setFullName(employee.fullName);
+      setUsername(employee.username || '');
       setEmail(employee.email);
-      setPhone(employee.phone);
-      setJobTitle(employee.jobTitle);
-      setCompanyId(employee.companyId);
-      setDepartmentId(employee.departmentId);
-      setRole(employee.role);
-      setStatus(employee.status);
+      setPhone(employee.phone || '');
+      setJobTitle(employee.jobTitle || '');
+      setCompanyId(employee.companyId || '');
+      setDepartmentId(employee.departmentId || '');
+      setRole(employee.role || 'employee');
+      setStatus(employee.status || 'active');
     } else {
       setFullName('');
+      setUsername('');
       setEmail('');
       setPhone('');
       setJobTitle('');
@@ -65,6 +68,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, isOpen, 
       setIsSubmitting(true);
       const payload = {
         fullName: fullName.trim(),
+        username: username.trim() ? username.trim().toLowerCase() : undefined,
         email: email.trim().toLowerCase(),
         phone: phone.trim(),
         jobTitle: jobTitle.trim(),
@@ -119,6 +123,21 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, isOpen, 
           </div>
 
           <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Username <span className="text-slate-400 font-normal">(Used for Excel Asset Matching)</span>
+            </label>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''))}
+              placeholder="e.g. cmmda1 or sjenkins"
+              className="w-full text-xs font-mono rounded-lg border border-slate-300 px-3 py-2 focus:border-indigo-600 focus:outline-hidden"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">Corporate Email *</label>
             <input
               type="email"
@@ -129,9 +148,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, isOpen, 
               required
             />
           </div>
-        </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">Job Title</label>
             <input

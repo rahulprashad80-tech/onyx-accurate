@@ -12,6 +12,7 @@ import {
   Server,
   Layers,
   Sparkles,
+  History,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
@@ -21,6 +22,7 @@ export type NavigationTab =
   | 'dashboard' 
   | 'tickets' 
   | 'inventory' 
+  | 'inventory_history'
   | 'companies' 
   | 'departments' 
   | 'employees' 
@@ -42,7 +44,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onClose,
 }) => {
   const { activeRole, userProfile } = useAuth();
-  const { tickets, computers, isLiveSync } = useData();
+  const { tickets, computers, isLiveSync, inventorySnapshots } = useData();
 
   // Compute live badges
   const openTicketsCount = tickets.filter(
@@ -79,6 +81,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badge: activeRole !== 'employee' && availableComputersCount > 0 ? availableComputersCount : undefined,
       badgeColor: 'bg-emerald-100 text-emerald-700',
       allowedRoles: ['admin', 'technician', 'employee'],
+    },
+    {
+      id: 'inventory_history' as NavigationTab,
+      label: 'Rollback & History',
+      icon: History,
+      badge: activeRole === 'admin' && inventorySnapshots.length > 0 ? inventorySnapshots.length : undefined,
+      badgeColor: 'bg-purple-100 text-purple-700',
+      allowedRoles: ['admin'],
     },
     {
       id: 'companies' as NavigationTab,

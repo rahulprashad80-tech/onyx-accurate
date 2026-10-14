@@ -59,8 +59,9 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ onSelectComputer }
         const dp = departments.find((d) => d.id === e.departmentId);
         return (
           e.fullName.toLowerCase().includes(query) ||
+          (e.username || '').toLowerCase().includes(query) ||
           e.email.toLowerCase().includes(query) ||
-          e.jobTitle.toLowerCase().includes(query) ||
+          (e.jobTitle || '').toLowerCase().includes(query) ||
           (co?.name || '').toLowerCase().includes(query) ||
           (dp?.name || '').toLowerCase().includes(query)
         );
@@ -207,8 +208,15 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ onSelectComputer }
                   return (
                     <tr key={emp.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="font-semibold text-slate-900">{emp.fullName}</div>
-                        <div className="text-[11px] text-slate-500">{emp.jobTitle}</div>
+                        <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                          <span>{emp.fullName}</span>
+                          {emp.username && (
+                            <span className="text-[10px] font-mono font-medium text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200">
+                              @{emp.username}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-500">{emp.jobTitle || 'Employee'}</div>
                         <div className="text-[10px] text-indigo-600 font-mono">{emp.email}</div>
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap text-slate-700">
