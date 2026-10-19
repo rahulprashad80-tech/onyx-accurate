@@ -13,6 +13,7 @@ import {
   Layers,
   Sparkles,
   History,
+  Mail,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
@@ -28,6 +29,7 @@ export type NavigationTab =
   | 'employees' 
   | 'users'
   | 'reports' 
+  | 'email_notifications'
   | 'settings';
 
 interface SidebarProps {
@@ -119,6 +121,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'users' as NavigationTab,
       label: 'User Accounts',
       icon: Users,
+      allowedRoles: ['admin'],
+    },
+    {
+      id: 'email_notifications' as NavigationTab,
+      label: 'Email Notifications',
+      icon: Mail,
       allowedRoles: ['admin'],
     },
     {

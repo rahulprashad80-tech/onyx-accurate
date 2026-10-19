@@ -382,9 +382,11 @@ export interface TicketTimelineEvent {
     | 'resolved'
     | 'closed'
     | 'reopened'
-    | 'edited';
+    | 'edited'
+    | 'notification_sent'
+    | 'notification_failed';
   actorName: string;
-  actorRole: UserRole;
+  actorRole: UserRole | 'system';
   message: string;
   timestamp: string;
   oldValue?: string;
@@ -426,4 +428,36 @@ export interface TicketComment {
   content: string;
   isInternal?: boolean;
   createdAt: string;
+}
+
+export interface EmailNotificationSettings {
+  adminEmail: string;
+  senderName?: string;
+  senderEmail?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpUser?: string;
+  smtpPass?: string;
+  smtpSecure?: boolean;
+  notifyAdminOnTicketCreated: boolean;
+  notifyTechOnTicketAssigned: boolean;
+  notifyRequesterOnStatusChange: boolean;
+  notifyAdminOnCriticalPriority: boolean;
+  notifyAdminOnOverdue: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface EmailDeliveryLog {
+  id: string;
+  timestamp: string;
+  ticketId?: string;
+  ticketNumber?: string;
+  subject: string;
+  recipient: string;
+  eventType: 'ticket_created' | 'ticket_assigned' | 'status_changed' | 'critical_ticket' | 'overdue' | 'test_email';
+  status: 'delivered' | 'failed' | 'simulated';
+  error?: string;
+  messageId?: string;
+  previewUrl?: string;
 }

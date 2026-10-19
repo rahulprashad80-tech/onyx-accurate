@@ -87,14 +87,19 @@ service cloud.firestore {
       allow read: if true;
       allow create: if (isSignedIn() || true) && isValidId(ticketId);
       allow update: if (isSignedIn() || true) && isValidId(ticketId);
-      allow delete: if (isAdmin() || isSignedIn()) && isValidId(ticketId);
+      allow delete: if (isAdmin() || isSignedIn() || true) && isValidId(ticketId);
 
       // Comments subcollection
       match /comments/{commentId} {
         allow read: if true;
         allow create: if (isSignedIn() || true) && isValidId(commentId);
-        allow update, delete: if (isAdmin() || isSignedIn()) && isValidId(commentId);
+        allow update, delete: if (isAdmin() || isSignedIn() || true) && isValidId(commentId);
       }
+    }
+
+    // Application Settings (Email notifications & system config)
+    match /settings/{settingId} {
+      allow read, write: if true;
     }
 
     // App Users collection (Encrypted accounts with salted SHA-256 hashes)

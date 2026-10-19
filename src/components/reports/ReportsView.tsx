@@ -25,16 +25,31 @@ import {
   Cpu,
   Search,
   Check,
+  Filter,
+  X,
+  FileText,
+  ShieldCheck,
 } from 'lucide-react';
+import { ComputerStatusIndicator } from '../inventory/ComputerStatusIndicator';
+import { Badge } from '../common/Badge';
 
 export const ReportsView: React.FC = () => {
   const { tickets, computers, employees, companies, departments, organizationAuditLog } = useData();
   const { activeRole } = useAuth();
   const { showToast } = useNotifications();
 
+  const isAdmin = activeRole === 'admin';
+
   const [activeTab, setActiveTab] = useState<'helpdesk' | 'inventory' | 'employees' | 'audit' | 'exports'>('helpdesk');
   const [auditSearch, setAuditSearch] = useState('');
   const [deviceEmployeeSearch, setDeviceEmployeeSearch] = useState('');
+
+  // Currently Displayed Inventory Filtering States
+  const [inventorySearch, setInventorySearch] = useState('');
+  const [inventoryStatusFilter, setInventoryStatusFilter] = useState('all');
+  const [inventoryTypeFilter, setInventoryTypeFilter] = useState('all');
+  const [inventoryCompanyFilter, setInventoryCompanyFilter] = useState('all');
+  const [inventoryWarrantyFilter, setInventoryWarrantyFilter] = useState('all');
 
   const now = new Date();
 
@@ -329,6 +344,79 @@ export const ReportsView: React.FC = () => {
     };
   }, [computers, now]);
 
+  // ==========================================
+  // CURRENTLY DISPLAYED COMPUTER INVENTORY DATA
+  // ==========================================
+  const displayedInventoryComputers = useMemo(() => {
+    return computers.filter((c) => {
+      // Status filter
+      if (inventoryStatusFilter !== 'all') {
+        if (inventoryStatusFilter === 'assigned') {
+          if (c.status !== 'assigned' && c.status !== 'in_use') return false;
+        } else if (inventoryStatusFilter === 'under_repair') {
+          if (c.status !== 'under_repair' && c.status !== 'maintenance') return false;
+        } else if (c.status !== inventoryStatusFilter) {
+          return false;
+        }
+      }
+
+      // Type filter
+      if (inventoryTypeFilter !== 'all' && c.type !== inventoryTypeFilter) {
+        return false;
+      }
+
+      // Company filter
+      if (inventoryCompanyFilter !== 'all' && c.companyId !== inventoryCompanyFilter) {
+        return false;
+      }
+
+      // Warranty filter
+      if (inventoryWarrantyFilter !== 'all') {
+        if (!c.warrantyExpiration) {
+          return false;
+        }
+        const exp = new Date(c.warrantyExpiration).getTime();
+        const diffDays = Math.ceil((exp - now.getTime()) / (1000 * 3600 * 24));
+        if (inventoryWarrantyFilter === 'expired' && diffDays >= 0) return false;
+        if (inventoryWarrantyFilter === 'expiring_30' && (diffDays < 0 || diffDays > 30)) return false;
+        if (inventoryWarrantyFilter === 'expiring_60' && (diffDays < 0 || diffDays > 60)) return false;
+        if (inventoryWarrantyFilter === 'expiring_90' && (diffDays < 0 || diffDays > 90)) return false;
+        if (inventoryWarrantyFilter === 'active' && diffDays < 0) return false;
+      }
+
+      // Search filter
+      if (inventorySearch.trim()) {
+        const q = inventorySearch.toLowerCase();
+        const co = companies.find((co) => co.id === c.companyId)?.name || '';
+        const dept = departments.find((d) => d.id === c.departmentId)?.name || '';
+        const matchTag = c.assetTag && c.assetTag.toLowerCase().includes(q);
+        const matchSerial = c.serialNumber && c.serialNumber.toLowerCase().includes(q);
+        const matchModel = `${c.brand} ${c.model}`.toLowerCase().includes(q);
+        const matchHost = c.hostname && c.hostname.toLowerCase().includes(q);
+        const matchUser = c.assignedEmployeeName && c.assignedEmployeeName.toLowerCase().includes(q);
+        const matchLoc = c.location && c.location.toLowerCase().includes(q);
+        const matchCo = co.toLowerCase().includes(q);
+        const matchDept = dept.toLowerCase().includes(q);
+
+        if (!matchTag && !matchSerial && !matchModel && !matchHost && !matchUser && !matchLoc && !matchCo && !matchDept) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [
+    computers,
+    inventoryStatusFilter,
+    inventoryTypeFilter,
+    inventoryCompanyFilter,
+    inventoryWarrantyFilter,
+    inventorySearch,
+    companies,
+    departments,
+    now,
+  ]);
+
   // Devices assigned to each employee
   const employeeDeviceDirectory = useMemo(() => {
     const list = employees.map((emp) => {
@@ -430,21 +518,106 @@ export const ReportsView: React.FC = () => {
   // CSV EXPORT HELPERS
   // ==========================================
   const triggerCSVDownload = (filename: string, headers: string[], rows: (string | number)[][]) => {
-    const csvContent =
-      'data:text/csv;charset=utf-8,' +
-      [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
+    link.setAttribute('href', url);
     link.setAttribute('download', `${filename}_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
     showToast({
       title: 'Report Export Complete',
-      message: `Downloaded ${filename}.csv successfully`,
+      message: `Downloaded ${filename}.csv (${rows.length} records) successfully`,
       type: 'success',
     });
+  };
+
+  // Export currently displayed / filtered computer inventory records (Admins only)
+  const exportDisplayedInventoryCSV = () => {
+    if (!isAdmin) {
+      showToast({
+        title: 'Admin Access Required',
+        message: 'Only Administrators have permission to download computer inventory CSV exports.',
+        type: 'warning',
+      });
+      return;
+    }
+
+    if (displayedInventoryComputers.length === 0) {
+      showToast({
+        title: 'No Data to Export',
+        message: 'No computer inventory records match the currently displayed filter criteria.',
+        type: 'warning',
+      });
+      return;
+    }
+
+    const headers = [
+      'Asset Tag',
+      'Serial Number',
+      'Brand',
+      'Model',
+      'Hostname',
+      'Type',
+      'OS',
+      'CPU',
+      'RAM',
+      'Storage',
+      'Condition',
+      'Status',
+      'Assigned Employee',
+      'Company',
+      'Department',
+      'Physical Location',
+      'Purchase Date',
+      'Purchase Cost',
+      'Warranty Expiration',
+      'Vendor',
+      'Notes',
+    ];
+    const rows = displayedInventoryComputers.map((c) => {
+      const co = companies.find((co) => co.id === c.companyId)?.name || '';
+      const dept = departments.find((d) => d.id === c.departmentId)?.name || '';
+      return [
+        `"${(c.assetTag || '').replace(/"/g, '""')}"`,
+        `"${(c.serialNumber || '').replace(/"/g, '""')}"`,
+        `"${(c.brand || '').replace(/"/g, '""')}"`,
+        `"${(c.model || '').replace(/"/g, '""')}"`,
+        `"${(c.hostname || '').replace(/"/g, '""')}"`,
+        `"${(c.type || '').replace(/"/g, '""')}"`,
+        `"${(c.os || '').replace(/"/g, '""')}"`,
+        `"${(c.cpu || '').replace(/"/g, '""')}"`,
+        `"${(c.ram || '').replace(/"/g, '""')}"`,
+        `"${(c.storage || '').replace(/"/g, '""')}"`,
+        `"${(c.condition || '').replace(/"/g, '""')}"`,
+        `"${(c.status || '').replace(/"/g, '""')}"`,
+        `"${(c.assignedEmployeeName || 'Unassigned').replace(/"/g, '""')}"`,
+        `"${co.replace(/"/g, '""')}"`,
+        `"${dept.replace(/"/g, '""')}"`,
+        `"${(c.location || '').replace(/"/g, '""')}"`,
+        `"${(c.purchaseDate || '').replace(/"/g, '""')}"`,
+        `"${(c.purchaseCost || '').replace(/"/g, '""')}"`,
+        `"${(c.warrantyExpiration || '').replace(/"/g, '""')}"`,
+        `"${(c.vendor || '').replace(/"/g, '""')}"`,
+        `"${(c.notes || '').replace(/"/g, '""')}"`,
+      ];
+    });
+
+    const hasFilters =
+      inventorySearch.trim() ||
+      inventoryStatusFilter !== 'all' ||
+      inventoryTypeFilter !== 'all' ||
+      inventoryCompanyFilter !== 'all' ||
+      inventoryWarrantyFilter !== 'all';
+
+    const filename = hasFilters
+      ? `displayed_inventory_filtered_${displayedInventoryComputers.length}_assets`
+      : `computer_inventory_displayed_${displayedInventoryComputers.length}_assets`;
+
+    triggerCSVDownload(filename, headers, rows);
   };
 
   const exportTicketsCSV = () => {
@@ -678,14 +851,29 @@ export const ReportsView: React.FC = () => {
             <Download className="w-3.5 h-3.5 text-slate-400" />
             <span>Tickets CSV</span>
           </button>
-          <button
-            type="button"
-            onClick={exportInventoryCSV}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5 text-slate-400" />
-            <span>Inventory CSV</span>
-          </button>
+
+          {/* Admin CSV Export Button for Currently Displayed Computer Inventory */}
+          {isAdmin ? (
+            <button
+              type="button"
+              onClick={exportDisplayedInventoryCSV}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 shadow-xs transition-colors cursor-pointer"
+              title={`Download currently displayed computer inventory (${displayedInventoryComputers.length} devices) as CSV spreadsheet`}
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Export Displayed Inventory CSV ({displayedInventoryComputers.length})</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={exportInventoryCSV}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer"
+              title="Download full computer inventory CSV"
+            >
+              <Download className="w-3.5 h-3.5 text-slate-400" />
+              <span>Inventory CSV ({computers.length})</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setActiveTab('exports')}
@@ -1050,6 +1238,253 @@ export const ReportsView: React.FC = () => {
               <p className="text-[11px] text-slate-400 mt-1">
                 {assetAgingAndReplacement.replacementCandidates.length} assets flagged for renewal
               </p>
+            </div>
+          </div>
+
+          {/* Currently Displayed Computer Inventory Data & Administrative CSV Export */}
+          <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-2xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Monitor className="w-4 h-4 text-emerald-600" />
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Currently Displayed Computer Inventory Data
+                  </h3>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                    {displayedInventoryComputers.length} {displayedInventoryComputers.length === 1 ? 'device' : 'devices'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Real-time operational inventory dataset with multi-factor search, hardware status filtering, and administrative CSV export.
+                </p>
+              </div>
+
+              {/* Admin CSV Export Button */}
+              <div className="flex items-center gap-2">
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    onClick={exportDisplayedInventoryCSV}
+                    disabled={displayedInventoryComputers.length === 0}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 shadow-xs transition-colors cursor-pointer shrink-0"
+                    title={`Export ${displayedInventoryComputers.length} currently displayed computer inventory records to CSV spreadsheet`}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download Displayed Inventory CSV ({displayedInventoryComputers.length})</span>
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-slate-400 italic">
+                    Admin access required to export CSV
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Filter Bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+              {/* Search input */}
+              <div className="relative lg:col-span-2">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={inventorySearch}
+                  onChange={(e) => setInventorySearch(e.target.value)}
+                  placeholder="Search tag, serial, model, employee, location..."
+                  className="w-full pl-8 pr-8 py-1.5 text-xs rounded-lg border border-slate-300 focus:outline-hidden focus:ring-1 focus:ring-emerald-500"
+                />
+                {inventorySearch && (
+                  <button
+                    type="button"
+                    onClick={() => setInventorySearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+
+              {/* Status filter */}
+              <select
+                value={inventoryStatusFilter}
+                onChange={(e) => setInventoryStatusFilter(e.target.value)}
+                className="text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-slate-700 focus:outline-hidden focus:ring-1 focus:ring-emerald-500"
+              >
+                <option value="all">All Statuses ({computers.length})</option>
+                <option value="available">In Stock / Available</option>
+                <option value="assigned">Assigned / In Use</option>
+                <option value="under_repair">Under Repair / Maintenance</option>
+                <option value="retired">Retired / E-waste</option>
+                <option value="lost">Reported Lost</option>
+              </select>
+
+              {/* Device Type filter */}
+              <select
+                value={inventoryTypeFilter}
+                onChange={(e) => setInventoryTypeFilter(e.target.value)}
+                className="text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-slate-700 focus:outline-hidden focus:ring-1 focus:ring-emerald-500"
+              >
+                <option value="all">All Device Types</option>
+                <option value="laptop">Laptop</option>
+                <option value="desktop">Desktop</option>
+                <option value="workstation">Workstation</option>
+                <option value="server">Server</option>
+                <option value="printer">Printer</option>
+                <option value="monitor">Monitor</option>
+                <option value="network_device">Network Device</option>
+              </select>
+
+              {/* Company / Org filter */}
+              <select
+                value={inventoryCompanyFilter}
+                onChange={(e) => setInventoryCompanyFilter(e.target.value)}
+                className="text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-slate-700 focus:outline-hidden focus:ring-1 focus:ring-emerald-500 truncate"
+              >
+                <option value="all">All Companies ({companies.length})</option>
+                {companies.map((co) => (
+                  <option key={co.id} value={co.id}>
+                    {co.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Active filter reset notice if applied */}
+            {(inventorySearch || inventoryStatusFilter !== 'all' || inventoryTypeFilter !== 'all' || inventoryCompanyFilter !== 'all' || inventoryWarrantyFilter !== 'all') && (
+              <div className="flex items-center justify-between text-xs p-2 rounded-lg bg-emerald-50/70 border border-emerald-100 text-emerald-900">
+                <span>
+                  Active filter applied: displaying <strong>{displayedInventoryComputers.length}</strong> of <strong>{computers.length}</strong> total devices.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInventorySearch('');
+                    setInventoryStatusFilter('all');
+                    setInventoryTypeFilter('all');
+                    setInventoryCompanyFilter('all');
+                    setInventoryWarrantyFilter('all');
+                  }}
+                  className="font-semibold text-emerald-800 hover:text-emerald-950 underline cursor-pointer"
+                >
+                  Reset all filters
+                </button>
+              </div>
+            )}
+
+            {/* Live Inventory Data Table */}
+            <div className="overflow-x-auto border border-slate-200 rounded-lg max-h-[480px] overflow-y-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="sticky top-0 z-10 bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
+                  <tr>
+                    <th className="py-2.5 px-3">Asset Tag</th>
+                    <th className="py-2.5 px-3">Model & Type</th>
+                    <th className="py-2.5 px-3">Hardware Specs</th>
+                    <th className="py-2.5 px-3">Status & Condition</th>
+                    <th className="py-2.5 px-3">Assigned User</th>
+                    <th className="py-2.5 px-3">Org & Site</th>
+                    <th className="py-2.5 px-3 text-right">Warranty</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {displayedInventoryComputers.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-slate-400 italic">
+                        No computer inventory records match the selected search or filter criteria.
+                      </td>
+                    </tr>
+                  ) : (
+                    displayedInventoryComputers.map((comp) => {
+                      const co = companies.find((c) => c.id === comp.companyId);
+                      const dept = departments.find((d) => d.id === comp.departmentId);
+                      return (
+                        <tr key={comp.id} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="py-2.5 px-3 whitespace-nowrap">
+                            <span className="font-mono font-bold text-indigo-600 block">
+                              {comp.assetTag}
+                            </span>
+                            {comp.serialNumber && (
+                              <span className="font-mono text-[10px] text-slate-400 block">
+                                S/N: {comp.serialNumber}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <span className="font-semibold text-slate-900 block">
+                              {comp.brand} {comp.model}
+                            </span>
+                            <span className="text-[10px] text-slate-400 capitalize">
+                              {comp.type.replace('_', ' ')} {comp.hostname ? `• ${comp.hostname}` : ''}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-600">
+                            <span className="text-[11px] block">
+                              {comp.cpu || 'N/A CPU'} • {comp.ram || 'RAM'}
+                            </span>
+                            <span className="text-[10px] text-slate-400 block">
+                              {comp.storage || 'Storage'} • {comp.os || 'OS'}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <div className="flex flex-col gap-1 items-start">
+                              <ComputerStatusIndicator status={comp.status} size="sm" />
+                              <Badge variant="computerCondition" value={comp.condition} size="sm" />
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            {comp.assignedEmployeeName ? (
+                              <div>
+                                <span className="font-medium text-slate-800 block">
+                                  {comp.assignedEmployeeName}
+                                </span>
+                                <span className="text-[10px] text-slate-400">
+                                  {comp.assignedDate ? `Assigned: ${comp.assignedDate}` : 'In active custody'}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-emerald-700 font-medium text-[11px]">
+                                In Stock (Available)
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <span className="text-slate-800 font-medium block">
+                              {co?.name || 'HQ Org'}
+                            </span>
+                            <span className="text-[10px] text-slate-400 block">
+                              {dept ? `${dept.name} • ` : ''}{comp.location || 'HQ Lab'}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                            {comp.warrantyExpiration ? (
+                              <span className="font-mono text-[11px] font-semibold text-slate-700">
+                                {comp.warrantyExpiration}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 text-[10px]">None</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Table Footer with Summary and Secondary CSV Trigger */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pt-2 text-xs text-slate-500">
+              <span>
+                Showing <strong>{displayedInventoryComputers.length}</strong> of <strong>{computers.length}</strong> inventory items
+              </span>
+              {isAdmin && displayedInventoryComputers.length > 0 && (
+                <button
+                  type="button"
+                  onClick={exportDisplayedInventoryCSV}
+                  className="font-semibold text-emerald-700 hover:text-emerald-900 inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download this displayed data ({displayedInventoryComputers.length} items) as CSV</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -1485,14 +1920,30 @@ export const ReportsView: React.FC = () => {
                 Exports comprehensive asset records including tags, serials, specs (CPU/RAM/storage), warranties, condition, and employee assignments.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={exportInventoryCSV}
-              className="mt-4 w-full py-2 px-3 text-xs font-semibold rounded-lg bg-cyan-700 text-white hover:bg-cyan-800 transition-colors inline-flex items-center justify-center gap-2 cursor-pointer shadow-xs"
-            >
-              <Download className="w-4 h-4" />
-              <span>Download Inventory CSV ({computers.length} records)</span>
-            </button>
+            <div className="space-y-2 mt-4">
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={exportDisplayedInventoryCSV}
+                  className="w-full py-2 px-3 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors inline-flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Download Currently Displayed Inventory ({displayedInventoryComputers.length} records)</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={exportInventoryCSV}
+                className={`w-full py-2 px-3 text-xs font-semibold rounded-lg transition-colors inline-flex items-center justify-center gap-2 cursor-pointer ${
+                  isAdmin
+                    ? 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-300'
+                    : 'bg-cyan-700 text-white hover:bg-cyan-800 shadow-xs'
+                }`}
+              >
+                <Download className="w-4 h-4" />
+                <span>Download All Assets CSV ({computers.length} records)</span>
+              </button>
+            </div>
           </div>
 
           {/* Card 3: Companies */}

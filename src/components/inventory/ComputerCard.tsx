@@ -31,6 +31,7 @@ import {
   HardDrive,
   Eye,
   ExternalLink,
+  QrCode,
 } from 'lucide-react';
 
 export interface ComputerCardProps {
@@ -38,6 +39,7 @@ export interface ComputerCardProps {
   company?: Company;
   department?: Department;
   onSelectComputer: (computer: Computer) => void;
+  onOpenQR?: (computer: Computer) => void;
   onAssign?: (computer: Computer) => void;
   onUnassign?: (computer: Computer) => void;
   onEdit?: (computer: Computer) => void;
@@ -74,6 +76,7 @@ export const ComputerCard: React.FC<ComputerCardProps> = ({
   company,
   department,
   onSelectComputer,
+  onOpenQR,
   onAssign,
   onUnassign,
   onEdit,
@@ -452,6 +455,21 @@ export const ComputerCard: React.FC<ComputerCardProps> = ({
                     <UserCheck className="w-3.5 h-3.5" />
                   </button>
                 )
+              )}
+
+              {/* View / Print Physical QR Sticker */}
+              {onOpenQR && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenQR(computer);
+                  }}
+                  className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg cursor-pointer transition-colors"
+                  title="View / Print Physical QR Sticker"
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                </button>
               )}
 
               {/* Edit Asset */}

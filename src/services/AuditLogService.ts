@@ -81,7 +81,12 @@ export interface SnapshotRestorationParams {
 class AuditLogServiceImpl {
   /**
    * Primary method to record an administrative action into the Firestore 'auditLogs' collection.
+   * Can be invoked via logAction or recordAction.
    */
+  async logAction(params: RecordActionParams): Promise<AuditLog> {
+    return this.recordAction(params);
+  }
+
   async recordAction(params: RecordActionParams): Promise<AuditLog> {
     const now = params.timestamp || new Date().toISOString();
     const logId = `audit-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;

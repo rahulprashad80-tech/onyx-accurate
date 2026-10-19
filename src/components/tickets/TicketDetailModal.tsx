@@ -3,6 +3,7 @@ import { Modal } from '../common/Modal';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
 import { useNotifications } from '../../context/NotificationContext';
+import { EmailNotificationService } from '../../services/EmailNotificationService';
 import { 
   Ticket, 
   TicketStatus, 
@@ -37,6 +38,7 @@ import {
   X,
   FileText,
   AlertTriangle,
+  Mail,
 } from 'lucide-react';
 
 interface TicketDetailModalProps {
@@ -161,6 +163,9 @@ export const TicketDetailModal: React.FC<TicketDetailModalProps> = ({
       targetId: ticket.id,
       recipientEmail: ticket.requesterEmail,
     });
+
+    // Automated transactional email notification to requester
+    EmailNotificationService.sendStatusChangedNotification(ticket, newStatus).catch(() => {});
   };
 
   const handlePriorityChange = async (newPriority: TicketPriority) => {
@@ -221,6 +226,10 @@ export const TicketDetailModal: React.FC<TicketDetailModalProps> = ({
         message: `Ticket assigned to ${techName}`,
         type: 'success',
       });
+
+      if (tech.email) {
+        EmailNotificationService.sendTicketAssignedNotification(ticket, tech.email, tech.fullName).catch(() => {});
+      }
     }
   };
 
@@ -248,6 +257,10 @@ export const TicketDetailModal: React.FC<TicketDetailModalProps> = ({
       message: `You are now the lead technician on #${ticket.ticketNumber}`,
       type: 'success',
     });
+
+    if (currentEmp?.email) {
+      EmailNotificationService.sendTicketAssignedNotification(ticket, currentEmp.email, myName).catch(() => {});
+    }
   };
 
   const handleSaveResolution = async () => {
@@ -875,25 +888,51 @@ export const TicketDetailModal: React.FC<TicketDetailModalProps> = ({
               </p>
             ) : (
               <div className="relative pl-6 space-y-4 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
-                {ticket.timeline.map((evt) => (
-                  <div key={evt.id} className="relative text-xs">
-                    <div className="absolute -left-6 top-1 w-2.5 h-2.5 rounded-full bg-indigo-600 ring-4 ring-indigo-50"></div>
-                    <div className="flex items-center justify-between text-[11px] text-slate-400">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-semibold text-slate-800">{evt.actorName}</span>
-                        <span className="text-slate-400">({evt.actorRole})</span>
+                {ticket.timeline.map((evt) => {
+                  const isNotificationSent = evt.type === 'notification_sent';
+                  const isNotificationFailed = evt.type === 'notification_failed';
+                  return (
+                    <div key={evt.id} className="relative text-xs">
+                      <div className={`absolute -left-6 top-1 w-2.5 h-2.5 rounded-full ring-4 ${
+                        isNotificationSent 
+                          ? 'bg-emerald-500 ring-emerald-50' 
+                          : isNotificationFailed 
+                          ? 'bg-rose-500 ring-rose-50' 
+                          : 'bg-indigo-600 ring-indigo-50'
+                      }`}></div>
+                      <div className="flex items-center justify-between text-[11px] text-slate-400">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-semibold text-slate-800">{evt.actorName}</span>
+                          <span className="text-slate-400">({evt.actorRole})</span>
+                          {isNotificationSent && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <Mail className="w-2.5 h-2.5" /> Email Dispatched
+                            </span>
+                          )}
+                          {isNotificationFailed && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-md text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                              <AlertCircle className="w-2.5 h-2.5" /> Delivery Issue
+                            </span>
+                          )}
+                        </div>
+                        <span className="shrink-0">{new Date(evt.timestamp).toLocaleString()}</span>
                       </div>
-                      <span>{new Date(evt.timestamp).toLocaleString()}</span>
+                      <p className={`mt-0.5 ${
+                        isNotificationSent 
+                          ? 'text-emerald-900 font-medium' 
+                          : isNotificationFailed 
+                          ? 'text-rose-900 font-medium' 
+                          : 'text-slate-700 font-medium'
+                      }`}>{evt.message}</p>
+                      {evt.oldValue && evt.newValue && (
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          <span className="line-through text-slate-400">{evt.oldValue}</span> →{' '}
+                          <span className="text-indigo-600 font-semibold">{evt.newValue}</span>
+                        </div>
+                      )}
                     </div>
-                    <p className="text-slate-700 font-medium mt-0.5">{evt.message}</p>
-                    {evt.oldValue && evt.newValue && (
-                      <div className="text-[11px] text-slate-500 mt-0.5">
-                        <span className="line-through text-slate-400">{evt.oldValue}</span> →{' '}
-                        <span className="text-indigo-600 font-semibold">{evt.newValue}</span>
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

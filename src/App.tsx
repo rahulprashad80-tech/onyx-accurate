@@ -63,10 +63,10 @@ const MainPortal: React.FC = () => {
 
   // Handle role restrictions on tabs
   useEffect(() => {
-    if (activeRole !== 'admin' && (currentTab === 'users' || currentTab === 'inventory_history')) {
+    if (activeRole !== 'admin' && (currentTab === 'users' || currentTab === 'inventory_history' || currentTab === 'email_notifications')) {
       setCurrentTab('dashboard');
     } else if (activeRole === 'employee') {
-      if (['companies', 'departments', 'employees', 'reports', 'users', 'inventory_history'].includes(currentTab)) {
+      if (['companies', 'departments', 'employees', 'reports', 'users', 'inventory_history', 'email_notifications'].includes(currentTab)) {
         setCurrentTab('dashboard');
       }
     }
@@ -144,6 +144,8 @@ const MainPortal: React.FC = () => {
         return <UsersView />;
       case 'reports':
         return <ReportsView />;
+      case 'email_notifications':
+        return <SettingsView defaultSubTab="email" onNavigateTab={(tab) => setCurrentTab(tab as NavigationTab)} />;
       case 'settings':
         return <SettingsView onNavigateTab={(tab) => setCurrentTab(tab as NavigationTab)} />;
       default:

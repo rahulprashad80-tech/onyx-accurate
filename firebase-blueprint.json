@@ -161,6 +161,24 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["action", "actingUserId", "timestamp", "affectedAssetCount"]
+    },
+    "EmailNotificationSettings": {
+      "title": "EmailNotificationSettings",
+      "description": "Email notification configuration and admin notification address",
+      "type": "object",
+      "properties": {
+        "adminEmail": { "type": "string", "maxLength": 254 },
+        "senderName": { "type": "string", "maxLength": 100 },
+        "senderEmail": { "type": "string", "maxLength": 254 },
+        "notifyAdminOnTicketCreated": { "type": "boolean" },
+        "notifyTechOnTicketAssigned": { "type": "boolean" },
+        "notifyRequesterOnStatusChange": { "type": "boolean" },
+        "notifyAdminOnCriticalPriority": { "type": "boolean" },
+        "notifyAdminOnOverdue": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "updatedBy": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["adminEmail"]
     }
   },
   "firestore": {
@@ -199,6 +217,10 @@
     "/auditLogs/{logId}": {
       "schema": { "$ref": "AuditLog" },
       "description": "Administrative actions audit log"
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "EmailNotificationSettings" },
+      "description": "Application settings"
     }
   }
 }

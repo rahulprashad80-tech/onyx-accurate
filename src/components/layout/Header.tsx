@@ -81,6 +81,10 @@ export const Header: React.FC<HeaderProps> = ({
       title: 'User Management & Access Control',
       subtitle: 'Manage administrative roles, technicians, credentials, and password resets',
     },
+    email_notifications: {
+      title: 'Email Notifications & Alerts',
+      subtitle: 'Configure administrator alert destinations, event routing, and transactional email verification',
+    },
     settings: {
       title: 'System Settings & Access',
       subtitle: 'Role configurations, database state, and demo test personas',

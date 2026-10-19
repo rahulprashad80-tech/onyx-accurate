@@ -18,9 +18,12 @@ import { ComputerCard } from './ComputerCard';
 import { ComputerStatusIndicator } from './ComputerStatusIndicator';
 import { InventoryAdminBar } from './InventoryAdminBar';
 import { UpgradeSchemaModal } from './UpgradeSchemaModal';
+import { QRCodeScannerModal } from './QRCodeScannerModal';
+import { AssetTagQRModal } from './AssetTagQRModal';
 import {
   Search,
   Plus,
+  QrCode,
   Monitor,
   Laptop,
   Printer,
@@ -89,6 +92,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const [computerToEdit, setComputerToEdit] = useState<Computer | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [computerForQRModal, setComputerForQRModal] = useState<Computer | null>(null);
 
   // Selection state for Administrative Bulk Management
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
@@ -671,25 +676,37 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       {/* 3. Filter and Action Toolbar */}
       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
         <div className="flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between">
-          {/* Search Input */}
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search by Asset Tag, Serial, Hostname, Employee, Company, Department, or Status..."
-              className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 transition-colors"
-            />
-            {searchTerm && (
-              <button
-                type="button"
-                onClick={() => setSearchTerm('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
+          {/* Search Input & QR Tag Scanner Button */}
+          <div className="flex items-center gap-2 flex-1">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search by Asset Tag, Serial, Hostname, Employee, Company, Department, or Status..."
+                className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 transition-colors"
+              />
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsScannerOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-slate-900 text-white hover:bg-slate-800 shadow-xs transition-colors cursor-pointer shrink-0"
+              title="Scan physical QR code or barcode on computer tag using camera"
+            >
+              <QrCode className="w-3.5 h-3.5 text-indigo-300" />
+              <span>Scan Tag</span>
+            </button>
           </div>
 
           {/* Action Buttons: Add Asset, Import Inventory, Rollback History, & CSV Export */}
@@ -918,6 +935,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     company={companyObj}
                     department={deptObj}
                     onSelectComputer={(c) => setSelectedComputer(c)}
+                    onOpenQR={(c) => setComputerForQRModal(c)}
                     onAssign={(c) => openAssignDialog(c)}
                     onUnassign={(c) => {
                       setComputerForUnassign(c);
@@ -1136,6 +1154,16 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                               title="View Asset Details"
                             >
                               <Eye className="w-4 h-4" />
+                            </button>
+
+                            {/* View / Print QR Tag */}
+                            <button
+                              type="button"
+                              onClick={() => setComputerForQRModal(comp)}
+                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg cursor-pointer"
+                              title="View / Print Physical QR Sticker"
+                            >
+                              <QrCode className="w-4 h-4" />
                             </button>
 
                             {canManage && (
@@ -1499,6 +1527,52 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         <UpgradeSchemaModal
           isOpen={isUpgradeModalOpen}
           onClose={() => setIsUpgradeModalOpen(false)}
+        />
+      )}
+
+      {/* QR Code Camera Scanner Modal */}
+      {isScannerOpen && (
+        <QRCodeScannerModal
+          isOpen={isScannerOpen}
+          onClose={() => setIsScannerOpen(false)}
+          computers={computers}
+          canManage={canManage}
+          onSelectComputer={(comp) => {
+            setSelectedComputer(comp);
+          }}
+          onSearchAndClose={(term) => {
+            setSearchTerm(term);
+            setIsScannerOpen(false);
+          }}
+          onOpenCreateWithTag={(tag) => {
+            setComputerToEdit({
+              id: '',
+              assetTag: tag,
+              brand: '',
+              model: '',
+              type: 'laptop',
+              serialNumber: '',
+              status: 'available',
+              condition: 'new',
+              purchaseDate: new Date().toISOString().split('T')[0],
+              companyId: companies[0]?.id || '',
+              departmentId: departments[0]?.id || '',
+            } as Computer);
+            setIsEditModalOpen(true);
+          }}
+          onOpenCreateTicketWithAsset={onOpenCreateTicketWithAsset}
+        />
+      )}
+
+      {/* Printable Physical Asset Tag QR Sticker Modal */}
+      {computerForQRModal && (
+        <AssetTagQRModal
+          isOpen={!!computerForQRModal}
+          computer={computerForQRModal}
+          onClose={() => setComputerForQRModal(null)}
+          onTestInScanner={() => {
+            setIsScannerOpen(true);
+          }}
         />
       )}
     </div>

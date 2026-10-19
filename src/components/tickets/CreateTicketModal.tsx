@@ -3,7 +3,9 @@ import { Modal } from '../common/Modal';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
 import { useNotifications } from '../../context/NotificationContext';
-import { TicketCategory, TicketPriority, TicketAttachment } from '../../types';
+import { EmailNotificationService } from '../../services/EmailNotificationService';
+import { AuditLogService } from '../../services/AuditLogService';
+import { TicketCategory, TicketPriority, TicketAttachment, Ticket } from '../../types';
 import { AlertCircle, Paperclip, X, Upload } from 'lucide-react';
 
 interface CreateTicketModalProps {
@@ -18,7 +20,7 @@ export const CreateTicketModal: React.FC<CreateTicketModalProps> = ({
   defaultAssetId 
 }) => {
   const { userProfile, activeRole } = useAuth();
-  const { createTicket, computers, tickets, companies, departments } = useData();
+  const { createTicket, updateTicket, computers, tickets, companies, departments } = useData();
   const { addNotification, showToast } = useNotifications();
 
   const [title, setTitle] = useState('');
@@ -113,7 +115,7 @@ export const CreateTicketModal: React.FC<CreateTicketModalProps> = ({
       const dueDate = new Date(Date.now() + slaHours * 3600 * 1000).toISOString();
 
       const ticketNo = generateTicketNumber();
-      await createTicket({
+      const newTicketId = await createTicket({
         ticketNumber: ticketNo,
         title: title.trim(),
         description: description.trim(),
@@ -131,11 +133,120 @@ export const CreateTicketModal: React.FC<CreateTicketModalProps> = ({
         attachments,
       });
 
-      showToast({
-        title: 'Ticket Submitted',
-        message: `Ticket #${ticketNo} created successfully.`,
-        type: 'success',
-      });
+      // Contextual metadata for email template
+      const compName = companies.find((c) => c.id === companyId)?.name || 'Corporate';
+      const deptName = departments.find((d) => d.id === departmentId)?.name || 'General Staff';
+      const assetSpecs = selectedComp
+        ? `${selectedComp.brand} ${selectedComp.model} (S/N: ${selectedComp.serialNumber || 'N/A'})`
+        : undefined;
+
+      const createdTicketData: Ticket = {
+        id: newTicketId,
+        ticketNumber: ticketNo,
+        title: title.trim(),
+        description: description.trim(),
+        category,
+        priority,
+        status: 'open',
+        requesterId: userProfile?.id || 'guest',
+        requesterName: requesterName.trim() || userProfile?.displayName || 'User',
+        requesterEmail: requesterEmail.trim() || userProfile?.email || '',
+        companyId: companyId || undefined,
+        departmentId: departmentId || undefined,
+        assetId: selectedAssetId || undefined,
+        assetTag: selectedComp?.assetTag || undefined,
+        dueDate,
+        attachments,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      // Dispatch automated email notification to administrator (non-blocking)
+      try {
+        const emailResult = await EmailNotificationService.sendTicketCreatedNotification(createdTicketData, {
+          companyName: compName,
+          departmentName: deptName,
+          assetSpecs,
+        });
+
+        if (emailResult.success) {
+          // Record successful email event in ticket activity timeline
+          await updateTicket(newTicketId, {}, {
+            type: 'notification_sent',
+            actorName: 'System Email Dispatcher',
+            actorRole: 'system',
+            message: `Automated email notification dispatched to Administrator (${emailResult.recipient || 'Admin'})`,
+          });
+
+          // Record in dedicated administrative auditLogs collection
+          AuditLogService.logAction({
+            action: 'ticket_email_notification',
+            actingUserId: userProfile?.id || 'system',
+            actingUserName: userProfile?.displayName || requesterName.trim() || 'System Dispatcher',
+            actingUserEmail: userProfile?.email || requesterEmail.trim(),
+            actingUserRole: activeRole || 'employee',
+            affectedAssetCount: selectedAssetId ? 1 : 0,
+            details: `Dispatched automated ticket notification for #${ticketNo} to Admin (${emailResult.recipient})`,
+            metadata: {
+              ticketId: newTicketId,
+              ticketNumber: ticketNo,
+              recipient: emailResult.recipient,
+              priority,
+              messageId: emailResult.messageId,
+            },
+          }).catch((logErr) => console.warn('Audit log write notice:', logErr));
+
+          showToast({
+            title: 'Ticket Submitted',
+            message: `Ticket #${ticketNo} created successfully. Admin alert sent to ${emailResult.recipient}.`,
+            type: 'success',
+          });
+        } else {
+          // Email dispatch failed: record notice in timeline and audit log, but keep ticket creation intact
+          await updateTicket(newTicketId, {}, {
+            type: 'notification_failed',
+            actorName: 'System Email Dispatcher',
+            actorRole: 'system',
+            message: `Admin notification delivery notice: ${emailResult.error || 'Dispatch issue'}`,
+          });
+
+          AuditLogService.logAction({
+            action: 'ticket_email_failed',
+            actingUserId: userProfile?.id || 'system',
+            actingUserName: userProfile?.displayName || 'System Dispatcher',
+            actingUserEmail: userProfile?.email || requesterEmail.trim(),
+            actingUserRole: activeRole || 'employee',
+            affectedAssetCount: selectedAssetId ? 1 : 0,
+            status: 'failure',
+            details: `Admin email alert failed for #${ticketNo}: ${emailResult.error}`,
+            metadata: {
+              ticketId: newTicketId,
+              ticketNumber: ticketNo,
+              error: emailResult.error,
+            },
+          }).catch((logErr) => console.warn('Audit log write notice:', logErr));
+
+          showToast({
+            title: 'Ticket Created with Notice',
+            message: `Ticket #${ticketNo} created successfully, but admin email alert could not be delivered (${emailResult.error || 'Server error'}).`,
+            type: 'warning',
+          });
+        }
+      } catch (emailErr: any) {
+        console.warn('Email notification error:', emailErr);
+        await updateTicket(newTicketId, {}, {
+          type: 'notification_failed',
+          actorName: 'System Email Dispatcher',
+          actorRole: 'system',
+          message: `Admin email delivery error: ${emailErr?.message || 'Network exception'}`,
+        });
+
+        showToast({
+          title: 'Ticket Created',
+          message: `Ticket #${ticketNo} created, but email notification alert failed to dispatch (${emailErr?.message || 'Check network'}).`,
+          type: 'warning',
+        });
+      }
 
       if (priority === 'critical' || priority === 'high') {
         addNotification({

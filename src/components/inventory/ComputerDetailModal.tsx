@@ -41,7 +41,9 @@ import {
   CheckCircle2,
   Image as ImageIcon,
   File,
+  QrCode,
 } from 'lucide-react';
+import { AssetTagQRModal } from './AssetTagQRModal';
 
 interface ComputerDetailModalProps {
   computer: Computer | null;
@@ -96,6 +98,9 @@ export const ComputerDetailModal: React.FC<ComputerDetailModalProps> = ({
   // Quick document upload
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [uploadCategory, setUploadCategory] = useState<'invoice' | 'warranty' | 'photo' | 'other'>('warranty');
+
+  // Physical QR Tag Modal state
+  const [isQRTagModalOpen, setIsQRTagModalOpen] = useState(false);
 
   if (!computer) return null;
 
@@ -369,6 +374,17 @@ export const ComputerDetailModal: React.FC<ComputerDetailModalProps> = ({
                 >
                   <Edit className="w-3.5 h-3.5" />
                   <span>Edit</span>
+                </button>
+
+                {/* View / Print Asset Tag QR Sticker */}
+                <button
+                  type="button"
+                  onClick={() => setIsQRTagModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 shadow-2xs cursor-pointer"
+                  title="View and print physical QR code asset tag sticker"
+                >
+                  <QrCode className="w-3.5 h-3.5 text-slate-600" />
+                  <span>QR Tag</span>
                 </button>
 
                 {/* Retire Button */}
@@ -1130,6 +1146,15 @@ export const ComputerDetailModal: React.FC<ComputerDetailModalProps> = ({
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* Physical Asset Tag QR Sticker Modal */}
+      {isQRTagModalOpen && (
+        <AssetTagQRModal
+          computer={computer}
+          isOpen={isQRTagModalOpen}
+          onClose={() => setIsQRTagModalOpen(false)}
+        />
       )}
     </>
   );
