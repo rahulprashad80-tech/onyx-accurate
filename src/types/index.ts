@@ -94,6 +94,20 @@ export interface Department {
   updatedAt: string;
 }
 
+export interface Location {
+  id: string;
+  name: string;
+  code?: string;
+  building?: string;
+  floor?: string;
+  room?: string;
+  address?: string;
+  description?: string;
+  status: 'active' | 'inactive';
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type EmployeeStatus = 'active' | 'on_leave' | 'terminated';
 
 export interface Employee {
@@ -156,13 +170,72 @@ export interface ComputerAuditEntry {
     | 'condition_change' 
     | 'retired' 
     | 'updated'
-    | 'attachment_added';
+    | 'attachment_added'
+    | 'consumable_replaced'
+    | 'config_updated';
   actorName: string;
   actorRole: UserRole;
   message: string;
   timestamp: string;
   oldValue?: string;
   newValue?: string;
+}
+
+// Printer Specific Types (Category B)
+export type PrinterType = 'laser' | 'inkjet' | 'dot_matrix' | 'thermal' | 'other';
+export type PrinterFunction = 'print' | 'print_scan' | 'print_scan_copy';
+export type PrinterColorMode = 'colour' | 'monochrome';
+export type DuplexPrinting = 'yes' | 'no';
+
+export type ConsumableType = 'cartridge' | 'toner' | 'drum' | 'other';
+export type ConsumableColor = 'black' | 'cyan' | 'magenta' | 'yellow' | 'other' | 'not_applicable';
+export type ConsumableStatus = 'available' | 'installed' | 'low' | 'empty';
+
+export interface ConsumableReplacementRecord {
+  id: string;
+  replacedAt: string;
+  replacedByName?: string;
+  previousPartNumber?: string;
+  newPartNumber?: string;
+  pageCountAtReplacement?: number | string;
+  reason?: string;
+  notes?: string;
+}
+
+export interface PrinterConsumable {
+  id: string;
+  consumableType: ConsumableType;
+  modelOrPartNumber: string;
+  color: ConsumableColor;
+  compatiblePrinterModel?: string;
+  quantityInstalled: number;
+  currentStatus: ConsumableStatus;
+  installationDate?: string;
+  expectedPageYield?: number | string;
+  lastReplacementDate?: string;
+  remarks?: string;
+  replacementHistory?: ConsumableReplacementRecord[];
+}
+
+// Network Equipment Specific Types (Category C)
+export type NetworkDeviceCategory =
+  | 'switch'
+  | 'router'
+  | 'firewall'
+  | 'access_point'
+  | 'modem'
+  | 'network_controller'
+  | 'other';
+
+export type NetworkDeviceStatus = 'active' | 'inactive' | 'under_maintenance' | 'retired';
+export type NetworkPortType = 'ethernet' | 'sfp' | 'sfp_plus' | 'other';
+
+export interface VlanEntry {
+  id: string;
+  vlanId: string;
+  name: string;
+  subnet?: string;
+  description?: string;
 }
 
 export interface Computer {
@@ -178,6 +251,7 @@ export interface Computer {
   departmentId?: string; // 8. Department ID
   department?: string; // 8b. Department Name
   location?: string; // 9. Location
+  locationId?: string; // 9b. Location Reference ID
   ipAddress?: string; // 10. IP Adresss
   serialNumber: string; // 11. Serial Number
   brand: string; // 12. Manufacturer / Brand
@@ -218,6 +292,44 @@ export interface Computer {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+
+  // Common Hardware & Enterprise procurement additions
+  assetName?: string;
+  macAddress?: string;
+  invoiceNumber?: string;
+  amcStart?: string;
+  amcEnd?: string;
+  lastServiceDate?: string;
+
+  // Printer specific fields (Category B)
+  printerType?: PrinterType;
+  printerFunction?: PrinterFunction;
+  printerName?: string;
+  connectivity?: string[]; // e.g. ['USB', 'Ethernet', 'Wi-Fi']
+  colorMode?: PrinterColorMode;
+  duplexPrinting?: DuplexPrinting;
+  pageCounter?: number | string;
+  consumables?: PrinterConsumable[];
+
+  // Network Equipment specific fields (Category C)
+  deviceCategory?: NetworkDeviceCategory;
+  deviceStatus?: NetworkDeviceStatus;
+  managementIp?: string;
+  interfaceType?: string;
+  portCount?: number | string;
+  portType?: NetworkPortType;
+  portSpeed?: string;
+  vlanDetails?: string;
+  vlans?: VlanEntry[];
+  firmwareVersion?: string;
+  firmwareUpdateDate?: string;
+  rackNumber?: string;
+  rackPosition?: string;
+  roomLocation?: string;
+  connectedSwitchName?: string;
+  connectedSwitchPort?: string;
+  responsiblePerson?: string;
+  configBackupDate?: string;
 
   // Lifecycle, archive, and schema upgrade fields
   isArchived?: boolean;

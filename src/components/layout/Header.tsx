@@ -69,6 +69,10 @@ export const Header: React.FC<HeaderProps> = ({
       title: 'Organizational Departments',
       subtitle: 'Department units mapped to companies and assigned hardware',
     },
+    locations: {
+      title: 'Physical Locations & Facilities',
+      subtitle: 'Manage buildings, server rooms, labs, and office floors',
+    },
     employees: {
       title: 'Employee Directory',
       subtitle: 'Staff profiles, hardware assignments, and contact details',

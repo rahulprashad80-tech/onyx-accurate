@@ -75,6 +75,12 @@ service cloud.firestore {
       allow write: if (isAdmin() || isSignedIn() || true) && isValidId(employeeId);
     }
 
+    // Physical Locations collection
+    match /locations/{locationId} {
+      allow read: if true;
+      allow write: if (isAdmin() || isSignedIn() || true) && isValidId(locationId);
+    }
+
     // Computer Inventory collection
     match /computers/{computerId} {
       allow read: if true;

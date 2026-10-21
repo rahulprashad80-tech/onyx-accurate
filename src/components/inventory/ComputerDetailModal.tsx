@@ -590,19 +590,19 @@ export const ComputerDetailModal: React.FC<ComputerDetailModalProps> = ({
           {/* TAB 2: ASSIGNMENT & CUSTODIAN */}
           {activeTab === 'assignment' && (
             <div className="space-y-4">
-              {computer.assignedEmployeeId || assignedEmployee ? (
+              {computer.assignedEmployeeId || assignedEmployee || computer.assetUserName ? (
                 <div className="p-4 bg-white border border-slate-200 rounded-xl space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm">
-                        {(assignedEmployee?.fullName || computer.assignedEmployeeName || 'U').charAt(0)}
+                        {(assignedEmployee?.fullName || computer.assignedEmployeeName || computer.assetUserName || 'U').charAt(0)}
                       </div>
                       <div>
                         <h4 className="text-sm font-bold text-slate-900">
-                          {assignedEmployee?.fullName || computer.assignedEmployeeName}
+                          {assignedEmployee?.fullName || computer.assignedEmployeeName || computer.assetUserName}
                         </h4>
                         <p className="text-xs text-slate-500">
-                          {assignedEmployee?.jobTitle || 'Assigned Staff Member'}
+                          {assignedEmployee?.jobTitle || (computer.assetUserName ? `User: @${computer.assetUserName}` : 'Assigned Staff Member')}
                         </p>
                       </div>
                     </div>
@@ -629,6 +629,12 @@ export const ComputerDetailModal: React.FC<ComputerDetailModalProps> = ({
                         {department ? ` • ${department.name}` : ''}
                       </span>
                     </div>
+                    {computer.assetUserName && (
+                      <div className="flex items-center gap-2 text-slate-700 font-medium">
+                        <User className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                        <span>User Name: <strong className="text-slate-900 font-semibold">@{computer.assetUserName}</strong></span>
+                      </div>
+                    )}
                     <div className="flex items-center gap-2 text-slate-600">
                       <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                       <span>Assigned Date: {computer.assignedDate || 'Recorded in inventory'}</span>

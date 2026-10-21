@@ -9,6 +9,7 @@ import {
   Building,
   Layers,
   Users,
+  MapPin,
   ArrowRight,
   X,
   CornerDownLeft,
@@ -30,11 +31,11 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
   onSelectComputer,
   onNavigateTab,
 }) => {
-  const { tickets, computers, companies, departments, employees } = useData();
+  const { tickets, computers, companies, departments, employees, locations } = useData();
   const { activeRole, userProfile } = useAuth();
   const [query, setQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<
-    'all' | 'tickets' | 'computers' | 'employees' | 'companies' | 'departments'
+    'all' | 'tickets' | 'computers' | 'employees' | 'companies' | 'departments' | 'locations'
   >('all');
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -70,6 +71,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
         employees: [],
         companies: [],
         departments: [],
+        locations: [],
         totalCount: 0,
       };
     }
@@ -105,6 +107,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
       c.brand.toLowerCase().includes(q) ||
       c.model.toLowerCase().includes(q) ||
       (c.assignedEmployeeName && c.assignedEmployeeName.toLowerCase().includes(q)) ||
+      (c.assetUserName && c.assetUserName.toLowerCase().includes(q)) ||
       (c.location && c.location.toLowerCase().includes(q))
     );
 
@@ -134,12 +137,25 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
           (d.headName && d.headName.toLowerCase().includes(q))
         );
 
+    const matchedLocations = isEmployee
+      ? []
+      : locations.filter((loc) =>
+          loc.name.toLowerCase().includes(q) ||
+          (loc.code && loc.code.toLowerCase().includes(q)) ||
+          (loc.building && loc.building.toLowerCase().includes(q)) ||
+          (loc.floor && loc.floor.toLowerCase().includes(q)) ||
+          (loc.room && loc.room.toLowerCase().includes(q)) ||
+          (loc.address && loc.address.toLowerCase().includes(q)) ||
+          (loc.description && loc.description.toLowerCase().includes(q))
+        );
+
     const totalCount =
       matchedTickets.length +
       matchedComputers.length +
       matchedEmployees.length +
       matchedCompanies.length +
-      matchedDepartments.length;
+      matchedDepartments.length +
+      matchedLocations.length;
 
     return {
       tickets: matchedTickets,
@@ -147,9 +163,10 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
       employees: matchedEmployees,
       companies: matchedCompanies,
       departments: matchedDepartments,
+      locations: matchedLocations,
       totalCount,
     };
-  }, [query, tickets, computers, companies, departments, employees, isEmployee, userProfile]);
+  }, [query, tickets, computers, companies, departments, employees, locations, isEmployee, userProfile]);
 
   if (!isOpen) return null;
 
@@ -164,7 +181,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search tickets, assets, employees, companies, departments..."
+            placeholder="Search tickets, assets, employees, companies, departments, locations..."
             className="w-full text-sm placeholder-slate-400 text-slate-900 focus:outline-hidden bg-transparent"
           />
           {query ? (
@@ -190,6 +207,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
             { id: 'computers', label: `Assets (${results.computers.length})` },
             ...(!isEmployee
               ? [
+                  { id: 'locations', label: `Locations (${results.locations.length})` },
                   { id: 'employees', label: `Employees (${results.employees.length})` },
                   { id: 'companies', label: `Companies (${results.companies.length})` },
                   { id: 'departments', label: `Departments (${results.departments.length})` },
@@ -401,6 +419,44 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                             </p>
                             <p className="text-[11px] text-slate-500 mt-0.5 truncate">
                               Manager: {d.managerName || d.headName || 'N/A'} • Location: {d.location || 'HQ'}
+                            </p>
+                          </div>
+                          <span className="text-[10px] text-indigo-600 font-medium">View →</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+              {/* Locations */}
+              {(activeFilter === 'all' || activeFilter === 'locations') &&
+                results.locations.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1.5 px-2">
+                      <MapPin className="w-3.5 h-3.5 text-indigo-600" />
+                      Physical Locations ({results.locations.length})
+                    </div>
+                    <div className="space-y-1">
+                      {results.locations.slice(0, 5).map((loc) => (
+                        <div
+                          key={loc.id}
+                          onClick={() => {
+                            onNavigateTab('locations');
+                            onClose();
+                          }}
+                          className="p-2.5 rounded-xl hover:bg-slate-100/80 transition-colors cursor-pointer flex items-center justify-between group"
+                        >
+                          <div className="min-w-0 pr-3">
+                            <p className="text-xs font-semibold text-slate-900 flex items-center gap-1.5">
+                              <span>{loc.name}</span>
+                              {loc.code && (
+                                <span className="text-[10px] bg-slate-200/80 text-slate-700 font-mono px-1.5 py-0.2 rounded">
+                                  {loc.code}
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-[11px] text-slate-500 mt-0.5 truncate">
+                              Building: {loc.building || 'HQ'}{loc.floor ? ` • Floor ${loc.floor}` : ''}{loc.room ? ` • Room ${loc.room}` : ''}{loc.address ? ` • ${loc.address}` : ''}
                             </p>
                           </div>
                           <span className="text-[10px] text-indigo-600 font-medium">View →</span>

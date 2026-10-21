@@ -14,6 +14,7 @@ import {
   Sparkles,
   History,
   Mail,
+  MapPin,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
@@ -24,6 +25,7 @@ export type NavigationTab =
   | 'tickets' 
   | 'inventory' 
   | 'inventory_history'
+  | 'locations'
   | 'companies' 
   | 'departments' 
   | 'employees' 
@@ -103,6 +105,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'departments' as NavigationTab,
       label: 'Departments',
       icon: Layers,
+      allowedRoles: ['admin', 'technician'],
+    },
+    {
+      id: 'locations' as NavigationTab,
+      label: 'Locations',
+      icon: MapPin,
       allowedRoles: ['admin', 'technician'],
     },
     {

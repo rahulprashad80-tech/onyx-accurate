@@ -14,6 +14,7 @@ import { TicketsView } from './components/tickets/TicketsView';
 import { InventoryView } from './components/inventory/InventoryView';
 import { CompaniesView } from './components/companies/CompaniesView';
 import { DepartmentsView } from './components/departments/DepartmentsView';
+import { LocationsView } from './components/locations/LocationsView';
 import { EmployeesView } from './components/employees/EmployeesView';
 import { ReportsView } from './components/reports/ReportsView';
 import { SettingsView } from './components/settings/SettingsView';
@@ -66,7 +67,7 @@ const MainPortal: React.FC = () => {
     if (activeRole !== 'admin' && (currentTab === 'users' || currentTab === 'inventory_history' || currentTab === 'email_notifications')) {
       setCurrentTab('dashboard');
     } else if (activeRole === 'employee') {
-      if (['companies', 'departments', 'employees', 'reports', 'users', 'inventory_history', 'email_notifications'].includes(currentTab)) {
+      if (['companies', 'departments', 'locations', 'employees', 'reports', 'users', 'inventory_history', 'email_notifications'].includes(currentTab)) {
         setCurrentTab('dashboard');
       }
     }
@@ -131,6 +132,12 @@ const MainPortal: React.FC = () => {
         return (
           <DepartmentsView
             onSelectTicket={(ticket) => setSelectedTicket(ticket)}
+            onSelectComputer={(comp) => setSelectedComputer(comp)}
+          />
+        );
+      case 'locations':
+        return (
+          <LocationsView
             onSelectComputer={(comp) => setSelectedComputer(comp)}
           />
         );

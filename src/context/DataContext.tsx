@@ -34,10 +34,11 @@ import {
   TicketStatus,
   TicketPriority,
   UserRole,
+  Location,
 } from '../types';
 import { handleFirestoreError, OperationType } from '../firebase/errors';
 import { sanitizeForFirestore, sanitizeForFirestoreUpdate } from '../firebase/utils';
-import { MASTER_COMPANIES, MASTER_DEPARTMENTS } from '../constants/masterData';
+import { MASTER_COMPANIES, MASTER_DEPARTMENTS, MASTER_LOCATIONS } from '../constants/masterData';
 import { useAuth } from './AuthContext';
 import { AuditLogService, RecordActionParams } from '../services/AuditLogService';
 
@@ -191,6 +192,19 @@ interface DataContextType {
   updateEmployee: (id: string, updates: Partial<Employee>) => Promise<void>;
   deleteEmployee: (id: string) => Promise<void>;
 
+  // Physical Locations
+  locations: Location[];
+  createLocation: (
+    location: Omit<Location, 'id' | 'createdAt' | 'updatedAt'>,
+    actor?: { name: string; role: UserRole }
+  ) => Promise<string>;
+  updateLocation: (
+    id: string,
+    updates: Partial<Location>,
+    actor?: { name: string; role: UserRole }
+  ) => Promise<void>;
+  deleteLocation: (id: string, actor?: { name: string; role: UserRole }) => Promise<void>;
+
   // Inventory Administration, Snapshots & Rollbacks
   inventorySnapshots: InventorySnapshot[];
   inventoryAuditLogs: InventoryAuditLog[];
@@ -280,6 +294,23 @@ const getDefaultDepartments = (): Department[] => {
   return list;
 };
 
+const getDefaultLocations = (): Location[] => {
+  const now = new Date().toISOString();
+  return MASTER_LOCATIONS.map((ml) => ({
+    id: ml.id,
+    name: ml.name,
+    code: ml.code,
+    building: ml.building,
+    floor: ml.floor,
+    room: ml.room || '',
+    address: ml.address || '',
+    description: ml.description || '',
+    status: ml.status,
+    createdAt: now,
+    updatedAt: now,
+  }));
+};
+
 const getInitialEmployees = (): Employee[] => {
   try {
     const raw = localStorage.getItem('it_desk_local_users_v1');
@@ -314,6 +345,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const { currentUser, isLoading: authLoading } = useAuth();
   const [companies, setCompanies] = useState<Company[]>(getDefaultCompanies);
   const [departments, setDepartments] = useState<Department[]>(getDefaultDepartments);
+  const [locations, setLocations] = useState<Location[]>(getDefaultLocations);
   const [employees, setEmployees] = useState<Employee[]>(getInitialEmployees);
   const [computers, setComputers] = useState<Computer[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -329,7 +361,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [inventoryAuditLogs, setInventoryAuditLogs] = useState<InventoryAuditLog[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
 
-  // 1. Immediately subscribe to public companies & departments master data (no auth required)
+  // 1. Immediately subscribe to public companies, departments & locations master data (no auth required)
   useEffect(() => {
     const unsubCompanies = onSnapshot(
       collection(db, 'companies'),
@@ -377,6 +409,25 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     );
 
+    const unsubLocations = onSnapshot(
+      collection(db, 'locations'),
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const list: Location[] = [];
+          snapshot.forEach((d) => {
+            list.push({ id: d.id, ...d.data() } as Location);
+          });
+          if (list.length > 0) {
+            list.sort((a, b) => a.name.localeCompare(b.name));
+            setLocations(list);
+          }
+        }
+      },
+      (err) => {
+        console.warn('Locations snapshot notice:', err);
+      }
+    );
+
     // Auto-verify and write master data to Firestore without duplicates
     ensureMasterDataInFirestore().catch((err) => {
       console.warn('Master data auto-sync notice:', err);
@@ -385,6 +436,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => {
       unsubCompanies();
       unsubDepartments();
+      unsubLocations();
     };
   }, []);
 
@@ -1606,6 +1658,96 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // Physical Location Management
+  const createLocation = async (
+    locData: Omit<Location, 'id' | 'createdAt' | 'updatedAt'>,
+    actor?: { name: string; role: UserRole }
+  ): Promise<string> => {
+    const now = new Date().toISOString();
+    const id = `loc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const fullLoc: Location = {
+      ...locData,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    try {
+      await setDoc(doc(db, 'locations', id), sanitizeForFirestore(fullLoc));
+    } catch (err) {
+      console.warn('Fallback saving location to Firestore:', err);
+    }
+
+    setLocations((prev) => {
+      const updated = [...prev.filter((l) => l.id !== id), fullLoc];
+      updated.sort((a, b) => a.name.localeCompare(b.name));
+      return updated;
+    });
+
+    if (actor) {
+      addOrganizationAuditEntry({
+        type: 'created',
+        actorName: actor.name,
+        actorRole: actor.role,
+        message: `Physical location ${fullLoc.name} (${fullLoc.building || 'General'}) registered by ${actor.name}`,
+        timestamp: now,
+      }).catch(() => {});
+    }
+
+    return id;
+  };
+
+  const updateLocation = async (
+    id: string,
+    updates: Partial<Location>,
+    actor?: { name: string; role: UserRole }
+  ): Promise<void> => {
+    const now = new Date().toISOString();
+    try {
+      await updateDoc(doc(db, 'locations', id), sanitizeForFirestoreUpdate({
+        ...updates,
+        updatedAt: now,
+      }));
+    } catch (err) {
+      console.warn('Fallback updating location in Firestore:', err);
+    }
+
+    setLocations((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, ...updates, updatedAt: now } : l))
+    );
+
+    if (actor) {
+      addOrganizationAuditEntry({
+        type: 'updated',
+        actorName: actor.name,
+        actorRole: actor.role,
+        message: `Physical location "${updates.name || id}" updated by ${actor.name}`,
+        timestamp: now,
+      }).catch(() => {});
+    }
+  };
+
+  const deleteLocation = async (id: string, actor?: { name: string; role: UserRole }): Promise<void> => {
+    const now = new Date().toISOString();
+    try {
+      await deleteDoc(doc(db, 'locations', id));
+    } catch (err) {
+      console.warn('Fallback deleting location in Firestore:', err);
+    }
+
+    setLocations((prev) => prev.filter((l) => l.id !== id));
+
+    if (actor) {
+      addOrganizationAuditEntry({
+        type: 'deleted',
+        actorName: actor.name,
+        actorRole: actor.role,
+        message: `Physical location ${id} removed by ${actor.name}`,
+        timestamp: now,
+      }).catch(() => {});
+    }
+  };
+
   // Organization / System Audit Logging
   const addOrganizationAuditEntry = async (entry: Omit<OrganizationAuditEntry, 'id'>): Promise<void> => {
     const fullEntry: OrganizationAuditEntry = {
@@ -1714,6 +1856,34 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             await setDoc(doc(db, 'departments', deptId), sanitizeForFirestore(newDept));
             existingDeptKeys.add(key);
           }
+        }
+      }
+
+      // 3. Initialize Master Physical Locations
+      const locSnap = await getDocs(collection(db, 'locations'));
+      const existingLocNames = new Set<string>();
+      locSnap.forEach((d) => {
+        const data = d.data();
+        if (data.name) existingLocNames.add(data.name.trim().toLowerCase());
+      });
+
+      for (const mLoc of MASTER_LOCATIONS) {
+        if (!existingLocNames.has(mLoc.name.trim().toLowerCase())) {
+          const newLoc = {
+            id: mLoc.id,
+            name: mLoc.name,
+            code: mLoc.code,
+            building: mLoc.building,
+            floor: mLoc.floor,
+            room: mLoc.room || '',
+            address: mLoc.address || '',
+            description: mLoc.description || '',
+            status: mLoc.status,
+            createdAt: now,
+            updatedAt: now,
+          };
+          await setDoc(doc(db, 'locations', mLoc.id), sanitizeForFirestore(newLoc));
+          existingLocNames.add(mLoc.name.trim().toLowerCase());
         }
       }
     } catch (err) {
@@ -2817,6 +2987,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         createEmployee,
         updateEmployee,
         deleteEmployee,
+        locations,
+        createLocation,
+        updateLocation,
+        deleteLocation,
         inventorySnapshots,
         inventoryAuditLogs,
         auditLogs,
